@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import { AlertCircle, CheckCircle2, Circle } from "lucide-react";
 import type { Dependency } from "@/data/projects";
 
@@ -6,7 +9,20 @@ interface DependenciesListProps {
 }
 
 export function DependenciesList({ dependencies }: DependenciesListProps) {
-  const pendingCount = dependencies.filter((d) => !d.completed).length;
+  const [deps, setDeps] = useState<Dependency[]>(dependencies);
+
+  const toggleDependency = (depId: string) => {
+    setDeps((prevDeps) =>
+      prevDeps.map((dep) => {
+        if (dep.id === depId) {
+          return { ...dep, completed: !dep.completed };
+        }
+        return dep;
+      })
+    );
+  };
+
+  const pendingCount = deps.filter((d) => !d.completed).length;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -21,15 +37,27 @@ export function DependenciesList({ dependencies }: DependenciesListProps) {
       </div>
 
       <ul className="space-y-3">
-        {dependencies.map((dep) => (
-          <li key={dep.id} className="flex items-start gap-3">
+        {deps.map((dep) => (
+          <li
+            key={dep.id}
+            className="flex items-start gap-3 cursor-pointer hover:bg-slate-50 rounded-lg p-2 -m-2 transition-colors"
+            onClick={() => toggleDependency(dep.id)}
+          >
             {dep.completed ? (
               <CheckCircle2 className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
             ) : (
               <Circle className="w-5 h-5 text-slate-300 mt-0.5 flex-shrink-0" />
             )}
             <div className="flex-1 min-w-0">
-              <p className="text-sm text-slate-700">{dep.title}</p>
+              <p
+                className={`text-sm ${
+                  dep.completed
+                    ? "text-slate-500 line-through"
+                    : "text-slate-700"
+                }`}
+              >
+                {dep.title}
+              </p>
               <p className="text-xs text-slate-500">Due: {dep.deadline}</p>
             </div>
           </li>
