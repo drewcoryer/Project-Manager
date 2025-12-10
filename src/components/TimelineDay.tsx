@@ -1,5 +1,8 @@
+"use client";
+
+import { useState } from "react";
 import { CheckCircle2, Circle, Clock } from "lucide-react";
-import type { DayPlan, Task } from "@/data/projects";
+import type { DayPlan, Task, TaskStatus } from "@/data/projects";
 import { clsx } from "clsx";
 
 interface TimelineDayProps {
@@ -7,7 +10,13 @@ interface TimelineDayProps {
   isLast?: boolean;
 }
 
-function TaskItem({ task }: { task: Task }) {
+function TaskItem({
+  task,
+  onToggle,
+}: {
+  task: Task;
+  onToggle: () => void;
+}) {
   const statusIcons = {
     pending: <Circle className="w-5 h-5 text-slate-300" />,
     in_progress: <Clock className="w-5 h-5 text-blue-500" />,
@@ -15,7 +24,10 @@ function TaskItem({ task }: { task: Task }) {
   };
 
   return (
-    <li className="flex items-start gap-3 py-2">
+    <li
+      className="flex items-start gap-3 py-2 cursor-pointer hover:bg-slate-50 rounded-lg px-2 -mx-2 transition-colors"
+      onClick={onToggle}
+    >
       <span className="mt-0.5 flex-shrink-0">{statusIcons[task.status]}</span>
       <span
         className={clsx(
@@ -32,10 +44,23 @@ function TaskItem({ task }: { task: Task }) {
 }
 
 export function TimelineDay({ dayPlan, isLast }: TimelineDayProps) {
-  const completedCount = dayPlan.tasks.filter(
-    (t) => t.status === "completed"
-  ).length;
-  const allCompleted = completedCount === dayPlan.tasks.length;
+  const [tasks, setTasks] = useState<Task[]>(dayPlan.tasks);
+
+  const toggleTask = (taskId: string) => {
+    setTasks((prevTasks) =>
+      prevTasks.map((task) => {
+        if (task.id === taskId) {
+          const newStatus: TaskStatus =
+            task.status === "completed" ? "pending" : "completed";
+          return { ...task, status: newStatus };
+        }
+        return task;
+      })
+    );
+  };
+
+  const completedCount = tasks.filter((t) => t.status === "completed").length;
+  const allCompleted = completedCount === tasks.length;
   const hasProgress = completedCount > 0;
 
   return (
@@ -70,13 +95,17 @@ export function TimelineDay({ dayPlan, isLast }: TimelineDayProps) {
               <p className="text-sm text-slate-500">{dayPlan.date}</p>
             </div>
             <span className="text-sm text-slate-500">
-              {completedCount}/{dayPlan.tasks.length} tasks
+              {completedCount}/{tasks.length} tasks
             </span>
           </div>
 
           <ul className="divide-y divide-slate-100">
-            {dayPlan.tasks.map((task) => (
-              <TaskItem key={task.id} task={task} />
+            {tasks.map((task) => (
+              <TaskItem
+                key={task.id}
+                task={task}
+                onToggle={() => toggleTask(task.id)}
+              />
             ))}
           </ul>
         </div>
