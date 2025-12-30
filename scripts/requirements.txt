@@ -1,0 +1,10 @@
+# Pledge 1% Company Scraper Dependencies
+
+# HTTP requests
+requests>=2.28.0
+
+# Browser automation (for sites that block direct requests)
+playwright>=1.40.0
+
+# Optional: For async improvements
+aiohttp>=3.9.0
