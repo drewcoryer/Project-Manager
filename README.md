@@ -37,8 +37,11 @@ cp .env.example .env.local
 
 # 4. Set up Supabase
 # - Create project or use existing
-# - Run migration:
+# - Run migrations:
 psql "$DATABASE_URL" -f supabase/001_initial.sql
+psql "$DATABASE_URL" -f supabase/002_granola_actions.sql
+psql "$DATABASE_URL" -f supabase/003_queue_terminal_statuses.sql
+psql "$DATABASE_URL" -f supabase/004_granola_realtime_slack.sql
 # - Add Supabase keys to .env.local
 
 # 5. Set up Google OAuth
@@ -58,10 +61,15 @@ psql "$DATABASE_URL" -f supabase/001_initial.sql
 
 # 7. Add Granola API key to .env.local
 
-# 7b. Optional: Slack cockpit pings
+# 7b. Slack cockpit pings + Granola to-do notifications
 # - Add SLACK_PING_CHANNEL_ID for the channel or DM to receive pings
-# - Add SLACK_PING_TOKEN for a bot/user token, or connect a Slack workspace
-# - Add CRON_SECRET if you want /api/slack/ping called by a scheduler
+# - Add SLACK_PING_TOKEN for a bot/user token with chat:write
+# - Add CRON_SECRET for /api/cron/granola and /api/slack/ping schedulers
+# - In Settings, add each client's dedicated Slack channel ID
+
+# 7c. Optional: AI fallback for Granola extraction
+# - Add OPENAI_API_KEY to extract tasks when Granola's summary has no clear action bullets
+# - Optional: set OPENAI_MODEL
 
 # 8. Run
 npm run dev
@@ -89,6 +97,7 @@ app/
     clients/route.ts                # Client config
     slack/route.ts                  # Slack summaries
     slack/ping/route.ts             # Manual or cron-triggered attention digest pings
+    cron/granola/route.ts           # Vercel cron-triggered Granola sync + Slack task notifications
     granola/route.ts                # Meeting notes
     queue/route.ts                  # Production queue CRUD
     workspaces/route.ts             # Workspace management
@@ -121,7 +130,15 @@ supabase/
 | clients | Client config (name, color, MRR, health) |
 | workspaces | OAuth tokens for Google Calendar + Slack connections |
 | queue_items | Production backlog with priority/status/client/source/link/reminder metadata |
+| granola_action_items | Durable Granola to-do items linked into queue_items |
 | daily_priorities | Today's picked production items |
+
+## Granola to Slack automation
+
+- Vercel Pro Cron calls `/api/cron/granola` every 5 minutes via `vercel.json`.
+- The cron route reads Granola notes with `updated_after`, imports stable task IDs into Supabase, and posts newly discovered to-dos into each client's mapped Slack channel.
+- Manual Granola Sync still imports/backfills tasks, but suppresses Slack notifications to avoid old-note spam.
+- Slack failures leave queue items retryable; the next cron run will try unsent Granola notifications again.
 
 ## Clients (seeded)
 

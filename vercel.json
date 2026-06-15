@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/granola",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}

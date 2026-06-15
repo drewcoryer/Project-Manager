@@ -2,6 +2,7 @@ import type { GranolaActionItem } from "@/lib/granola";
 
 export const GRANOLA_ACTIONS_MIGRATION = "supabase/002_granola_actions.sql";
 export const SUPABASE_INITIAL_MIGRATION = "supabase/001_initial.sql";
+export const GRANOLA_REALTIME_MIGRATION = "supabase/004_granola_realtime_slack.sql";
 
 export const CLIENT_SEEDS = [
   { key: "charm", name: "Charm / SKMR & Stable Kernel", short_name: "Charm/SK", color: "#b45309", mrr: 4500, status: "active", health: "green" },
@@ -20,6 +21,9 @@ export type GranolaActionRow = {
   note_title: string | null;
   note_url: string | null;
   meeting_date: string | null;
+  source_note_updated_at?: string | null;
+  extraction_method?: string | null;
+  extraction_warning?: string | null;
   queue_item_id?: string | null;
   raw: GranolaActionItem;
   last_seen_at: string;
@@ -58,6 +62,9 @@ export function toGranolaActionRow(item: GranolaActionItem, importedAt: string):
     note_title: item.noteTitle || null,
     note_url: item.noteUrl || null,
     meeting_date: item.meetingDate || null,
+    source_note_updated_at: item.sourceNoteUpdatedAt || null,
+    extraction_method: item.extractionMethod || null,
+    extraction_warning: item.extractionWarning || null,
     raw: item,
     last_seen_at: importedAt,
     imported_at: importedAt,
@@ -69,18 +76,21 @@ export function toQueueRow(item: GranolaActionItem, index: number) {
     title: item.text,
     client_key: mapGranolaClientKey(item.clientKey),
     status: "ready",
-    priority: priorityForGranolaClient(item.clientKey),
+    priority: item.priority || priorityForGranolaClient(item.clientKey),
     source: "granola",
     link: item.noteUrl || null,
-    due_date: null,
+    due_date: item.dueDate || null,
     notes: [
       "Source: Granola",
       `Granola client: ${item.clientLabel}`,
       `Meeting: ${item.noteTitle}`,
       `Meeting date: ${item.meetingDate}`,
       `Note: ${item.noteUrl}`,
+      item.owner ? `Owner: ${item.owner}` : null,
+      item.extractionMethod ? `Extraction: ${item.extractionMethod}` : null,
+      item.extractionWarning ? `Extraction warning: ${item.extractionWarning}` : null,
       `Action ID: ${item.id}`,
-    ].join("\n"),
+    ].filter(Boolean).join("\n"),
     sort_order: index,
     granola_action_id: item.id,
   };
@@ -91,15 +101,19 @@ export function toLegacyQueueRow(item: GranolaActionItem, index: number) {
     title: item.text,
     client_key: mapGranolaClientKey(item.clientKey),
     status: "ready",
-    priority: priorityForGranolaClient(item.clientKey),
+    priority: item.priority || priorityForGranolaClient(item.clientKey),
+    due_date: item.dueDate || null,
     notes: [
       "Source: Granola",
       `Granola client: ${item.clientLabel}`,
       `Meeting: ${item.noteTitle}`,
       `Meeting date: ${item.meetingDate}`,
       `Note: ${item.noteUrl}`,
+      item.owner ? `Owner: ${item.owner}` : null,
+      item.extractionMethod ? `Extraction: ${item.extractionMethod}` : null,
+      item.extractionWarning ? `Extraction warning: ${item.extractionWarning}` : null,
       `Action ID: ${item.id}`,
-    ].join("\n"),
+    ].filter(Boolean).join("\n"),
     sort_order: index,
   };
 }
@@ -115,13 +129,16 @@ export function fromGranolaActionRow(row: GranolaActionRow): GranolaActionItem {
     noteTitle: row.note_title || "Untitled",
     noteUrl: row.note_url || "",
     meetingDate: row.meeting_date || "",
+    sourceNoteUpdatedAt: row.source_note_updated_at || row.last_seen_at,
+    extractionMethod: row.extraction_method === "openai" || row.extraction_method === "none" ? row.extraction_method : "rules",
+    extractionWarning: row.extraction_warning || null,
   };
 }
 
 export function isSupabaseSchemaError(err: unknown) {
   const error = err as SupabaseLikeError;
   const text = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" ");
-  return /(PGRST204|PGRST205|42P01|42P10|42703|granola_action_items|granola_action_id|schema cache|Could not find|no unique or exclusion constraint)/i.test(text);
+  return /(PGRST204|PGRST205|42P01|42P10|42703|granola_action_items|granola_action_id|source_note_updated_at|extraction_method|extraction_warning|slack_notified_at|slack_channel_id|slack_message_ts|slack_notification_status|integration_locks|claim_integration_lock|release_integration_lock|schema cache|Could not find|no unique or exclusion constraint)/i.test(text);
 }
 
 export function publicErrorDetail(err: unknown) {

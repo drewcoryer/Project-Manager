@@ -67,6 +67,30 @@ function serverKeyCheck(): HealthCheck {
   return { ok: true, label: "Supabase server key", detail: role };
 }
 
+function cronSecretCheck(): HealthCheck {
+  return process.env.CRON_SECRET
+    ? { ok: true, label: "Cron secret", detail: "configured" }
+    : { ok: false, label: "Cron secret", detail: "CRON_SECRET missing" };
+}
+
+function slackPostingCheck(): HealthCheck {
+  if (!process.env.SLACK_PING_TOKEN) {
+    return { ok: false, label: "Slack posting", detail: "SLACK_PING_TOKEN missing" };
+  }
+
+  if (!process.env.SLACK_PING_CHANNEL_ID) {
+    return { ok: false, label: "Slack posting", detail: "Fallback SLACK_PING_CHANNEL_ID missing" };
+  }
+
+  return { ok: true, label: "Slack posting", detail: "configured" };
+}
+
+function openAiCheck(): HealthCheck {
+  return process.env.OPENAI_API_KEY
+    ? { ok: true, label: "OpenAI fallback", detail: process.env.OPENAI_MODEL || "default model" }
+    : { ok: true, label: "OpenAI fallback", detail: "optional; rules-only until OPENAI_API_KEY is set" };
+}
+
 export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -78,6 +102,9 @@ export async function GET() {
     tableCheck("granola_action_items", "Granola actions table"),
     granolaCheck(),
   ]);
+  const cron = cronSecretCheck();
+  const slackPosting = slackPostingCheck();
+  const openAi = openAiCheck();
 
   const required = [serverKey, queue, granola];
 
@@ -90,6 +117,9 @@ export async function GET() {
       clients,
       granolaActions,
       granola,
+      cron,
+      slackPosting,
+      openAi,
     },
   });
 }

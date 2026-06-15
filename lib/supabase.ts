@@ -60,6 +60,11 @@ export type QueueItem = {
   due_date: string | null;
   remind_at: string | null;
   last_pinged_at: string | null;
+  slack_notified_at?: string | null;
+  slack_channel_id?: string | null;
+  slack_message_ts?: string | null;
+  slack_notification_status?: "pending" | "sent" | "suppressed" | "failed";
+  slack_notification_error?: string | null;
   notes: string | null;
   sort_order: number;
 };
@@ -111,6 +116,19 @@ export async function getClients(): Promise<Client[]> {
     .select("*")
     .eq("status", "active")
     .order("mrr", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function updateClientSlackChannels(clientKey: string, channelIds: string[]): Promise<Client> {
+  requireSupabaseConfig();
+  const cleaned = Array.from(new Set(channelIds.map(id => id.trim()).filter(Boolean)));
+  const { data, error } = await supabase
+    .from("clients")
+    .update({ slack_channel_ids: cleaned.length > 0 ? cleaned : null })
+    .eq("key", clientKey)
+    .select("*")
+    .single();
   if (error) throw error;
   return data;
 }

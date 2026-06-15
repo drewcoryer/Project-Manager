@@ -34,6 +34,14 @@ type IntegrationHealth = {
   checks: Record<string, HealthCheck>;
 };
 
+type Client = {
+  key: string;
+  name: string;
+  short_name: string;
+  color: string;
+  slack_channel_ids: string[] | null;
+};
+
 const CLIENTS: Record<string, { name: string; color: string }> = {
   charm: { name: "Charm/SK", color: "#b45309" },
   coderpad: { name: "CoderPad", color: "#2563eb" },
@@ -43,6 +51,9 @@ const CLIENTS: Record<string, { name: string; color: string }> = {
 
 export default function SettingsPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [channelDrafts, setChannelDrafts] = useState<Record<string, string>>({});
+  const [savingClientKey, setSavingClientKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [granolaImporting, setGranolaImporting] = useState(false);
@@ -50,6 +61,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     loadWorkspaces();
+    loadClients();
     loadHealth();
     // Check URL params for connection status
     const params = new URLSearchParams(window.location.search);
@@ -69,6 +81,18 @@ export default function SettingsPage() {
       setWorkspaces(data.workspaces || []);
     }
     setLoading(false);
+  }
+
+  async function loadClients() {
+    const res = await fetch("/api/clients");
+    if (res.ok) {
+      const data = await res.json();
+      const nextClients = data.clients || [];
+      setClients(nextClients);
+      setChannelDrafts(Object.fromEntries(
+        nextClients.map((client: Client) => [client.key, (client.slack_channel_ids || []).join(", ")])
+      ));
+    }
   }
 
   async function loadHealth() {
@@ -122,6 +146,32 @@ export default function SettingsPage() {
     }
 
     setGranolaImporting(false);
+  }
+
+  async function saveClientSlackChannels(clientKey: string) {
+    setSavingClientKey(clientKey);
+    setMessage(null);
+
+    const channelIds = (channelDrafts[clientKey] || "")
+      .split(",")
+      .map(value => value.trim())
+      .filter(Boolean);
+
+    const res = await fetch("/api/clients", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: clientKey, slack_channel_ids: channelIds }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setClients(prev => prev.map(client => client.key === clientKey ? data.client : client));
+      setMessage(`Saved Slack channel for ${data.client?.short_name || clientKey}.`);
+    } else {
+      setMessage(`Save failed: ${data.error || "Could not update Slack channel"}`);
+    }
+
+    setSavingClientKey(null);
   }
 
   const calendarWorkspaces = workspaces.filter(w => w.type === "google_calendar");
@@ -292,6 +342,45 @@ export default function SettingsPage() {
               onClick={() => connectSlack("New Workspace", "")}>
               <Plus className="w-3 h-3" /> Add workspace
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MessageSquare className="w-4 h-4" /> Client Slack Channels
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            {clients.map(client => (
+              <div key={client.key} className="flex flex-col gap-2 rounded-lg border bg-background px-3 py-3 sm:flex-row sm:items-center">
+                <div className="min-w-0 sm:w-36">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full" style={{ background: client.color }} />
+                    <span className="truncate text-sm font-medium">{client.short_name}</span>
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-muted-foreground">{client.key}</div>
+                </div>
+                <input
+                  value={channelDrafts[client.key] || ""}
+                  onChange={event => setChannelDrafts(prev => ({ ...prev, [client.key]: event.target.value }))}
+                  placeholder="C0123456789"
+                  className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-zinc-400"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void saveClientSlackChannels(client.key)}
+                  disabled={savingClientKey === client.key}
+                  className="gap-1"
+                >
+                  <Check className="w-3 h-3" />
+                  Save
+                </Button>
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>
