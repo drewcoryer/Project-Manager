@@ -89,6 +89,7 @@ export function toQueueRow(item: GranolaActionItem, index: number) {
       item.owner ? `Owner: ${item.owner}` : null,
       item.extractionMethod ? `Extraction: ${item.extractionMethod}` : null,
       item.extractionWarning ? `Extraction warning: ${item.extractionWarning}` : null,
+      item.context ? `Context:\n${item.context}` : null,
       `Action ID: ${item.id}`,
     ].filter(Boolean).join("\n"),
     sort_order: index,
@@ -112,6 +113,7 @@ export function toLegacyQueueRow(item: GranolaActionItem, index: number) {
       item.owner ? `Owner: ${item.owner}` : null,
       item.extractionMethod ? `Extraction: ${item.extractionMethod}` : null,
       item.extractionWarning ? `Extraction warning: ${item.extractionWarning}` : null,
+      item.context ? `Context:\n${item.context}` : null,
       `Action ID: ${item.id}`,
     ].filter(Boolean).join("\n"),
     sort_order: index,
@@ -132,6 +134,7 @@ export function fromGranolaActionRow(row: GranolaActionRow): GranolaActionItem {
     sourceNoteUpdatedAt: row.source_note_updated_at || row.last_seen_at,
     extractionMethod: row.extraction_method === "openai" || row.extraction_method === "none" ? row.extraction_method : "rules",
     extractionWarning: row.extraction_warning || null,
+    context: row.raw?.context || null,
   };
 }
 

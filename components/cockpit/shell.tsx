@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ComponentType, type DragEvent } from "react";
+import { useCallback, useEffect, useState, type ComponentType, type DragEvent, type MouseEvent } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
   Circle,
   Clock,
   ExternalLink,
+  FileText,
   GripVertical,
   Layers,
   Link2,
@@ -29,8 +30,10 @@ import {
   RefreshCw,
   Send,
   Settings,
+  Table2,
   TrendingUp,
   Users,
+  X,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -111,6 +114,7 @@ type IntegrationHealth = {
 };
 
 type DataMode = "loading" | "live" | "demo" | "error";
+type QueueView = "board" | "sheet";
 
 const DEFAULT_CLIENTS: Record<string, ClientConfig> = {
   charm: { key: "charm", name: "Charm / SKMR & Stable Kernel", short_name: "Charm/SK", color: "#b45309", bg: "#fffbeb", mrr: 4500, status: "active", health: "green" },
@@ -323,6 +327,37 @@ function getQueueLink(item: QueueItem) {
   return match?.[1] || null;
 }
 
+function noteField(notes: string | null | undefined, label: string) {
+  const match = notes?.match(new RegExp(`^${label}:\\s*(.+)$`, "m"));
+  return match?.[1] || null;
+}
+
+function taskContext(item: QueueItem) {
+  const context = item.notes?.match(/^Context:\n([\s\S]*?)(?:\nAction ID:|$)/m)?.[1]?.trim();
+  if (context) return context;
+
+  const fields = [
+    noteField(item.notes, "Meeting"),
+    noteField(item.notes, "Meeting date"),
+    noteField(item.notes, "Granola client"),
+    noteField(item.notes, "Extraction warning"),
+  ].filter(Boolean);
+
+  return fields.join(" - ") || item.notes || "";
+}
+
+function taskOwner(item: QueueItem) {
+  return noteField(item.notes, "Owner");
+}
+
+function taskMeeting(item: QueueItem) {
+  return noteField(item.notes, "Meeting");
+}
+
+function taskActionId(item: QueueItem) {
+  return noteField(item.notes, "Action ID");
+}
+
 function SourceBadge({ item }: { item: QueueItem }) {
   return <Badge variant="ghost" className="text-[10px] capitalize">{getQueueSource(item)}</Badge>;
 }
@@ -338,12 +373,16 @@ function QueueActions({
   const previous = STATUS_FLOW[statusIndex - 1];
   const next = STATUS_FLOW[statusIndex + 1];
   const sourceLink = getQueueLink(item);
+  const move = (event: MouseEvent<HTMLButtonElement>, status: QueueStatus) => {
+    event.stopPropagation();
+    onMove(item.id, status);
+  };
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1" onClick={event => event.stopPropagation()}>
       {sourceLink && (
         <Button variant="ghost" size="icon" asChild title="Open source link">
-          <a href={sourceLink} target="_blank" rel="noopener">
+          <a href={sourceLink} target="_blank" rel="noopener" onClick={event => event.stopPropagation()}>
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
         </Button>
@@ -352,7 +391,7 @@ function QueueActions({
         variant="ghost"
         size="icon"
         disabled={!previous}
-        onClick={() => previous && onMove(item.id, previous)}
+        onClick={event => previous && move(event, previous)}
         title="Move back"
         aria-label="Move back"
       >
@@ -362,7 +401,7 @@ function QueueActions({
         variant="ghost"
         size="icon"
         disabled={!next}
-        onClick={() => next && onMove(item.id, next)}
+        onClick={event => next && move(event, next)}
         title="Move forward"
         aria-label="Move forward"
       >
@@ -372,7 +411,7 @@ function QueueActions({
         variant="ghost"
         size="icon"
         disabled={item.status === "archived"}
-        onClick={() => onMove(item.id, "archived")}
+        onClick={event => move(event, "archived")}
         title="Archive"
         aria-label="Archive"
       >
@@ -382,7 +421,7 @@ function QueueActions({
         variant="ghost"
         size="icon"
         disabled={item.status === "cancelled"}
-        onClick={() => onMove(item.id, "cancelled")}
+        onClick={event => move(event, "cancelled")}
         title="Cancel"
         aria-label="Cancel"
       >
@@ -399,6 +438,7 @@ function QueueCard({
   draggable = false,
   onDragStart,
   onDragEnd,
+  onOpen,
 }: {
   item: QueueItem;
   clients: Record<string, ClientConfig>;
@@ -406,15 +446,11 @@ function QueueCard({
   draggable?: boolean;
   onDragStart?: (item: QueueItem, event: DragEvent<HTMLDivElement>) => void;
   onDragEnd?: () => void;
+  onOpen?: (item: QueueItem) => void;
 }) {
   const due = formatDueDate(item.due_date);
   const tone = getDueTone(item.due_date);
-  const sourceLink = getQueueLink(item);
-  const title = sourceLink ? (
-    <a href={sourceLink} target="_blank" rel="noopener" className="hover:text-foreground/70">
-      {item.title}
-    </a>
-  ) : item.title;
+  const context = taskContext(item);
 
   return (
     <div
@@ -423,7 +459,10 @@ function QueueCard({
       draggable={draggable}
       onDragStart={event => onDragStart?.(item, event)}
       onDragEnd={onDragEnd}
-      className={`rounded-lg border bg-card p-3 shadow-sm ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
+      onClick={() => onOpen?.(item)}
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      className={`rounded-lg border bg-card p-3 shadow-sm transition-colors hover:border-foreground/20 ${draggable ? "cursor-grab active:cursor-grabbing" : onOpen ? "cursor-pointer" : ""}`}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
@@ -432,7 +471,12 @@ function QueueCard({
         </div>
         <SourceBadge item={item} />
       </div>
-      <div className="text-sm font-medium leading-snug">{title}</div>
+      <div className="text-sm font-medium leading-snug">{item.title}</div>
+      {context && (
+        <div className="mt-1 line-clamp-2 text-xs leading-snug text-muted-foreground">
+          {context}
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
         <ClientPill clientKey={item.client_key} clients={clients} />
         {!item.client_key && <Badge variant="ghost" className="text-[10px]">Internal</Badge>}
@@ -450,9 +494,204 @@ function QueueCard({
   );
 }
 
+function TaskDetailPanel({
+  item,
+  clients,
+  onClose,
+  onMove,
+}: {
+  item: QueueItem;
+  clients: Record<string, ClientConfig>;
+  onClose: () => void;
+  onMove: (id: string, status: QueueStatus) => void;
+}) {
+  const sourceLink = getQueueLink(item);
+  const context = taskContext(item);
+  const meeting = taskMeeting(item);
+  const owner = taskOwner(item);
+  const actionId = taskActionId(item);
+  const meetingDate = noteField(item.notes, "Meeting date");
+  const extraction = noteField(item.notes, "Extraction");
+  const extractionWarning = noteField(item.notes, "Extraction warning");
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30" onClick={onClose}>
+      <div
+        className="ml-auto flex h-full w-full max-w-2xl flex-col overflow-y-auto border-l bg-background shadow-xl"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="sticky top-0 z-10 border-b bg-background px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <StatusBadge status={item.status} />
+                <PriorityBadge priority={item.priority} />
+                <SourceBadge item={item} />
+                <ClientPill clientKey={item.client_key} clients={clients} />
+              </div>
+              <h2 className="text-lg font-semibold leading-tight tracking-tight">{item.title}</h2>
+            </div>
+            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close task">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-4 px-5 py-4">
+          <div className="flex flex-wrap gap-2">
+            {item.status !== "in-progress" && !CLOSED_QUEUE_STATUSES.includes(item.status) && (
+              <Button variant="outline" size="sm" onClick={() => onMove(item.id, "in-progress")}>
+                Start
+              </Button>
+            )}
+            {item.status !== "done" && (
+              <Button variant="outline" size="sm" onClick={() => onMove(item.id, "done")}>
+                Mark done
+              </Button>
+            )}
+            {item.status !== "cancelled" && (
+              <Button variant="outline" size="sm" onClick={() => onMove(item.id, "cancelled")} className="gap-1 text-orange-700">
+                <Ban className="h-3.5 w-3.5" />
+                Cancel
+              </Button>
+            )}
+            {item.status !== "archived" && (
+              <Button variant="outline" size="sm" onClick={() => onMove(item.id, "archived")} className="gap-1">
+                <Archive className="h-3.5 w-3.5" />
+                Archive
+              </Button>
+            )}
+          </div>
+
+          <div className="grid gap-2 text-sm sm:grid-cols-2">
+            <div className="rounded-md border px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Client</div>
+              <div className="mt-1">{item.client_key ? clients[item.client_key]?.name || item.client_key : "Internal"}</div>
+            </div>
+            <div className="rounded-md border px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Due date</div>
+              <div className="mt-1">{formatDueDate(item.due_date) || "No due date"}</div>
+            </div>
+            <div className="rounded-md border px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Owner</div>
+              <div className="mt-1">{owner || "Unassigned"}</div>
+            </div>
+            <div className="rounded-md border px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Meeting</div>
+              <div className="mt-1">{meeting || "No meeting context"}</div>
+            </div>
+          </div>
+
+          <div className="rounded-md border">
+            <div className="flex items-center gap-2 border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <FileText className="h-3.5 w-3.5" />
+              Task context
+            </div>
+            <div className="whitespace-pre-wrap px-3 py-3 text-sm leading-relaxed text-foreground/85">
+              {context || "No context captured yet. Future Granola imports will store a task-level context excerpt here."}
+            </div>
+          </div>
+
+          <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+            {meetingDate && <div><span className="font-medium text-foreground/70">Meeting date:</span> {meetingDate}</div>}
+            {extraction && <div><span className="font-medium text-foreground/70">Extraction:</span> {extraction}</div>}
+            {actionId && <div className="break-all"><span className="font-medium text-foreground/70">Action ID:</span> {actionId}</div>}
+            {sourceLink && (
+              <div className="break-all">
+                <span className="font-medium text-foreground/70">Source:</span> {sourceLink}
+              </div>
+            )}
+          </div>
+
+          {extractionWarning && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {extractionWarning}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QueueSheetView({
+  items,
+  clients,
+  onMove,
+  onOpen,
+}: {
+  items: QueueItem[];
+  clients: Record<string, ClientConfig>;
+  onMove: (id: string, status: QueueStatus) => void;
+  onOpen: (item: QueueItem) => void;
+}) {
+  const sorted = [...items].sort((a, b) => {
+    const priority = { p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority];
+    if (priority !== 0) return priority;
+    return (dueDayKey(a.due_date) || "9999-12-31").localeCompare(dueDayKey(b.due_date) || "9999-12-31");
+  });
+
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <table className="min-w-[1180px] w-full border-collapse text-left text-sm">
+        <thead className="bg-muted/50 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <tr>
+            <th className="border-b px-3 py-2 font-semibold">Task</th>
+            <th className="border-b px-3 py-2 font-semibold">Client</th>
+            <th className="border-b px-3 py-2 font-semibold">Priority</th>
+            <th className="border-b px-3 py-2 font-semibold">Status</th>
+            <th className="border-b px-3 py-2 font-semibold">Due</th>
+            <th className="border-b px-3 py-2 font-semibold">Owner</th>
+            <th className="border-b px-3 py-2 font-semibold">Context</th>
+            <th className="border-b px-3 py-2 font-semibold">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map(item => {
+            const context = taskContext(item);
+            return (
+              <tr
+                key={item.id}
+                onClick={() => onOpen(item)}
+                className="cursor-pointer border-b transition-colors hover:bg-muted/40"
+              >
+                <td className="max-w-[260px] px-3 py-2 align-top">
+                  <div className="font-medium leading-snug">{item.title}</div>
+                  <div className="mt-1 text-[11px] text-muted-foreground capitalize">{getQueueSource(item)}</div>
+                </td>
+                <td className="px-3 py-2 align-top">
+                  <ClientPill clientKey={item.client_key} clients={clients} />
+                  {!item.client_key && <Badge variant="ghost" className="text-[10px]">Internal</Badge>}
+                </td>
+                <td className="px-3 py-2 align-top"><PriorityBadge priority={item.priority} /></td>
+                <td className="px-3 py-2 align-top"><StatusBadge status={item.status} /></td>
+                <td className="px-3 py-2 align-top text-xs">{formatDueDate(item.due_date) || "-"}</td>
+                <td className="px-3 py-2 align-top text-xs">{taskOwner(item) || "-"}</td>
+                <td className="max-w-[360px] px-3 py-2 align-top text-xs leading-snug text-muted-foreground">
+                  <div className="line-clamp-3 whitespace-pre-wrap">{context || "-"}</div>
+                </td>
+                <td className="px-3 py-2 align-top">
+                  <QueueActions item={item} onMove={onMove} />
+                </td>
+              </tr>
+            );
+          })}
+          {sorted.length === 0 && (
+            <tr>
+              <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">No queue items in this view</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function CockpitShell() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [queueFilter, setQueueFilter] = useState("all");
+  const [queueView, setQueueView] = useState<QueueView>("board");
+  const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [clients, setClients] = useState<Record<string, ClientConfig>>(DEFAULT_CLIENTS);
@@ -590,6 +829,10 @@ export function CockpitShell() {
     }
   }
 
+  function openQueueItem(item: QueueItem) {
+    setSelectedQueueId(item.id);
+  }
+
   async function sendSlackPing() {
     setPingState("sending");
     try {
@@ -649,6 +892,7 @@ export function CockpitShell() {
     .slice(0, 8);
   const attentionCount = attentionQueue.length + replyItems.length;
   const healthIssue = healthProblem(health);
+  const selectedQueueItem = selectedQueueId ? queue.find(item => item.id === selectedQueueId) || null : null;
 
   const nowMin = clock.getHours() * 60 + clock.getMinutes();
   const currentEvent = events.find(event => {
@@ -742,12 +986,20 @@ export function CockpitShell() {
               {clientQueue.length === 0 && <p className="py-5 text-center text-sm text-muted-foreground">No open deliverables</p>}
               <div className="space-y-2">
                 {clientQueue.map(item => (
-                  <QueueCard key={item.id} item={item} clients={clients} onMove={moveQueueItem} />
+                  <QueueCard key={item.id} item={item} clients={clients} onMove={moveQueueItem} onOpen={openQueueItem} />
                 ))}
               </div>
             </CardContent>
           </Card>
         </div>
+        {selectedQueueItem && (
+          <TaskDetailPanel
+            item={selectedQueueItem}
+            clients={clients}
+            onClose={() => setSelectedQueueId(null)}
+            onMove={moveQueueItem}
+          />
+        )}
       </TooltipProvider>
     );
   }
@@ -870,7 +1122,7 @@ export function CockpitShell() {
                 )}
                 <div className="space-y-2">
                   {(attentionQueue.length > 0 ? attentionQueue : inboxQueue).map(item => (
-                    <QueueCard key={item.id} item={item} clients={clients} onMove={moveQueueItem} />
+                    <QueueCard key={item.id} item={item} clients={clients} onMove={moveQueueItem} onOpen={openQueueItem} />
                   ))}
                 </div>
               </CardContent>
@@ -938,7 +1190,7 @@ export function CockpitShell() {
                 {attentionQueue.length === 0 && <p className="py-5 text-center text-sm text-muted-foreground">No urgent production items</p>}
                 <div className="space-y-2">
                   {attentionQueue.map(item => (
-                    <QueueCard key={item.id} item={item} clients={clients} onMove={moveQueueItem} />
+                    <QueueCard key={item.id} item={item} clients={clients} onMove={moveQueueItem} onOpen={openQueueItem} />
                   ))}
                 </div>
               </CardContent>
@@ -1008,63 +1260,90 @@ export function CockpitShell() {
           </TabsContent>
 
           <TabsContent value="queue" className="space-y-3">
-            <div className="flex flex-wrap gap-1.5">
-              {[{ id: "all", label: "All" }, ...Object.values(clients).map(client => ({ id: client.key, label: client.short_name })), { id: "internal", label: "Internal" }].map(filter => (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-1.5">
+                {[{ id: "all", label: "All" }, ...Object.values(clients).map(client => ({ id: client.key, label: client.short_name })), { id: "internal", label: "Internal" }].map(filter => (
+                  <Button
+                    key={filter.id}
+                    variant={queueFilter === filter.id ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setQueueFilter(filter.id)}
+                    className="h-7 text-xs"
+                  >
+                    {filter.label}
+                  </Button>
+                ))}
+              </div>
+              <div className="flex gap-1 rounded-md border bg-background p-0.5">
                 <Button
-                  key={filter.id}
-                  variant={queueFilter === filter.id ? "default" : "outline"}
+                  variant={queueView === "board" ? "default" : "ghost"}
                   size="sm"
-                  onClick={() => setQueueFilter(filter.id)}
-                  className="h-7 text-xs"
+                  onClick={() => setQueueView("board")}
+                  className="h-7 gap-1 text-xs"
                 >
-                  {filter.label}
+                  <Layers className="h-3.5 w-3.5" />
+                  Board
                 </Button>
-              ))}
-            </div>
-
-            <div className="overflow-x-auto pb-2">
-              <div className="grid min-w-[1180px] grid-cols-6 gap-3">
-                {STATUS_COLUMNS.map(column => {
-                  const columnItems = filteredQueue
-                    .filter(item => item.status === column.key)
-                    .sort((a, b) => ({ p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority]));
-
-                  return (
-                    <div
-                      key={column.key}
-                      onDragOver={event => {
-                        event.preventDefault();
-                        event.dataTransfer.dropEffect = "move";
-                      }}
-                      onDrop={event => handleQueueDrop(column.key, event)}
-                      className={`rounded-lg border bg-muted/30 transition-colors ${draggingQueueId ? "border-primary/30 bg-primary/[0.03]" : ""}`}
-                    >
-                      <div className="flex items-center justify-between border-b bg-background px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <span className={`h-2 w-2 rounded-full ${column.dot}`} />
-                          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{column.label}</span>
-                        </div>
-                        <Badge variant={column.terminal ? "outline" : "ghost"} className="text-[10px] tabular-nums">{columnItems.length}</Badge>
-                      </div>
-                      <div className="min-h-[220px] space-y-2 p-2">
-                        {columnItems.length === 0 && <div className="px-2 py-6 text-center text-xs text-muted-foreground">Empty</div>}
-                        {columnItems.map(item => (
-                          <QueueCard
-                            key={item.id}
-                            item={item}
-                            clients={clients}
-                            onMove={moveQueueItem}
-                            draggable
-                            onDragStart={handleQueueDragStart}
-                            onDragEnd={() => setDraggingQueueId(null)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
+                <Button
+                  variant={queueView === "sheet" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setQueueView("sheet")}
+                  className="h-7 gap-1 text-xs"
+                >
+                  <Table2 className="h-3.5 w-3.5" />
+                  Sheet
+                </Button>
               </div>
             </div>
+
+            {queueView === "sheet" ? (
+              <QueueSheetView items={filteredQueue} clients={clients} onMove={moveQueueItem} onOpen={openQueueItem} />
+            ) : (
+              <div className="overflow-x-auto pb-2">
+                <div className="grid min-w-[1180px] grid-cols-6 gap-3">
+                  {STATUS_COLUMNS.map(column => {
+                    const columnItems = filteredQueue
+                      .filter(item => item.status === column.key)
+                      .sort((a, b) => ({ p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority]));
+
+                    return (
+                      <div
+                        key={column.key}
+                        onDragOver={event => {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "move";
+                        }}
+                        onDrop={event => handleQueueDrop(column.key, event)}
+                        className={`rounded-lg border bg-muted/30 transition-colors ${draggingQueueId ? "border-primary/30 bg-primary/[0.03]" : ""}`}
+                      >
+                        <div className="flex items-center justify-between border-b bg-background px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`h-2 w-2 rounded-full ${column.dot}`} />
+                            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{column.label}</span>
+                          </div>
+                          <Badge variant={column.terminal ? "outline" : "ghost"} className="text-[10px] tabular-nums">{columnItems.length}</Badge>
+                        </div>
+                        <div className="min-h-[220px] space-y-2 p-2">
+                          {columnItems.length === 0 && <div className="px-2 py-6 text-center text-xs text-muted-foreground">Empty</div>}
+                          {columnItems.map(item => (
+                            <QueueCard
+                              key={item.id}
+                              item={item}
+                              clients={clients}
+                              onMove={moveQueueItem}
+                              onOpen={openQueueItem}
+                              draggable
+                              onDragStart={handleQueueDragStart}
+                              onDragEnd={() => setDraggingQueueId(null)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {filteredQueue.some(item => getQueueLink(item)) && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -1074,6 +1353,14 @@ export function CockpitShell() {
             )}
           </TabsContent>
         </Tabs>
+        {selectedQueueItem && (
+          <TaskDetailPanel
+            item={selectedQueueItem}
+            clients={clients}
+            onClose={() => setSelectedQueueId(null)}
+            onMove={moveQueueItem}
+          />
+        )}
       </div>
     </TooltipProvider>
   );

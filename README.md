@@ -65,6 +65,7 @@ psql "$DATABASE_URL" -f supabase/004_granola_realtime_slack.sql
 # - Add SLACK_PING_CHANNEL_ID for the channel or DM to receive pings
 # - Add SLACK_PING_TOKEN for a bot/user token with chat:write
 # - Add CRON_SECRET for /api/cron/granola and /api/slack/ping schedulers
+# - Optional: add GRANOLA_ACTION_SECRET for immediate /api/granola/list-todos action calls
 # - In Settings, add each client's dedicated Slack channel ID
 
 # 7c. Optional: AI fallback for Granola extraction
@@ -99,6 +100,7 @@ app/
     slack/ping/route.ts             # Manual or cron-triggered attention digest pings
     cron/granola/route.ts           # Vercel cron-triggered Granola sync + Slack task notifications
     granola/route.ts                # Meeting notes
+    granola/list-todos/route.ts     # Protected immediate action endpoint for /list todo workflows
     queue/route.ts                  # Production queue CRUD
     workspaces/route.ts             # Workspace management
 lib/
@@ -137,6 +139,7 @@ supabase/
 
 - Vercel Pro Cron calls `/api/cron/granola` every 5 minutes via `vercel.json`.
 - The cron route reads Granola notes with `updated_after`, imports stable task IDs into Supabase, and posts newly discovered to-dos into each client's mapped Slack channel.
+- An immediate action can `POST /api/granola/list-todos` with `Authorization: Bearer $GRANOLA_ACTION_SECRET` to run the same sync after a call.
 - Manual Granola Sync still imports/backfills tasks, but suppresses Slack notifications to avoid old-note spam.
 - Slack failures leave queue items retryable; the next cron run will try unsent Granola notifications again.
 

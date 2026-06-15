@@ -41,6 +41,7 @@ export type GranolaActionItem = {
   dueDate?: string | null;
   owner?: string | null;
   priority?: "p0" | "p1" | "p2";
+  context?: string | null;
 };
 
 export type GranolaActionExtraction = {
@@ -215,6 +216,21 @@ function extractOwner(text: string) {
   return match?.[1]?.trim() || null;
 }
 
+function buildContextSnippet(note: GranolaNote, taskText: string) {
+  const source = note.summary_markdown || note.summary_text || "";
+  const lines = source.split("\n").map(line => line.trim()).filter(Boolean);
+  const normalizedTask = normalizeActionText(taskText).toLowerCase();
+  const matchIndex = lines.findIndex(line => normalizeActionText(line).toLowerCase().includes(normalizedTask));
+
+  if (matchIndex >= 0) {
+    const start = Math.max(0, matchIndex - 2);
+    const end = Math.min(lines.length, matchIndex + 3);
+    return lines.slice(start, end).map(line => line.replace(/^#{1,6}\s+/, "")).join("\n");
+  }
+
+  return lines.slice(0, 5).map(line => line.replace(/^#{1,6}\s+/, "")).join("\n") || null;
+}
+
 function ruleExtractActionTexts(markdown: string) {
   const items: string[] = [];
   const lines = markdown.split("\n");
@@ -368,6 +384,7 @@ export async function extractActionsFromNote(note: GranolaNote): Promise<Granola
       dueDate: item.dueDate || null,
       owner: item.owner || null,
       priority: item.priority,
+      context: buildContextSnippet(note, item.text),
     }));
 
   return { items, method, warning };
