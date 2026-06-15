@@ -32,6 +32,7 @@ export default function SettingsPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+  const [granolaImporting, setGranolaImporting] = useState(false);
 
   useEffect(() => {
     loadWorkspaces();
@@ -70,6 +71,26 @@ export default function SettingsPage() {
 
   function connectSlack(name: string, clientKey: string) {
     window.location.href = `/api/auth/callback/slack?action=connect&name=${encodeURIComponent(name)}&client_key=${clientKey}`;
+  }
+
+  async function importGranolaActions() {
+    setGranolaImporting(true);
+    setMessage(null);
+
+    const res = await fetch("/api/granola/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ days: 7 }),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      setMessage(`Imported ${data.imported || 0} Granola actions (${data.skipped || 0} already existed)`);
+    } else {
+      setMessage(`Connection failed: ${data.error || "Granola import failed"}`);
+    }
+
+    setGranolaImporting(false);
   }
 
   const calendarWorkspaces = workspaces.filter(w => w.type === "google_calendar");
@@ -230,9 +251,15 @@ export default function SettingsPage() {
                 <div className="text-sm font-medium">Granola</div>
                 <div className="text-[11px] text-muted-foreground">Meeting notes</div>
               </div>
-              <Badge variant={process.env.NEXT_PUBLIC_GRANOLA_CONNECTED === "true" ? "success" : "ghost"}>
-                {process.env.NEXT_PUBLIC_GRANOLA_CONNECTED === "true" ? "Connected" : "Set in .env"}
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Badge variant={process.env.NEXT_PUBLIC_GRANOLA_CONNECTED === "true" ? "success" : "ghost"}>
+                  {process.env.NEXT_PUBLIC_GRANOLA_CONNECTED === "true" ? "Connected" : "Set in .env"}
+                </Badge>
+                <Button variant="outline" size="sm" onClick={() => void importGranolaActions()} disabled={granolaImporting} className="gap-1">
+                  <RefreshCw className={`w-3 h-3 ${granolaImporting ? "animate-spin" : ""}`} />
+                  Import
+                </Button>
+              </div>
             </div>
             <Separator />
             <div className="flex items-center justify-between py-2">
