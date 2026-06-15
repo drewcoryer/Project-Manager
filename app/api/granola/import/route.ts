@@ -11,7 +11,7 @@ import {
   toLegacyQueueRow,
   toQueueRow,
 } from "@/lib/granola-db";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseServiceKeyRole, isPublicSupabaseServerKey, supabase } from "@/lib/supabase";
 import type { GranolaActionItem } from "@/lib/granola";
 
 type QueueLinkRow = {
@@ -68,9 +68,26 @@ function migrationForStep(step: ImportStep) {
   return step.startsWith("queue_") ? SUPABASE_INITIAL_MIGRATION : GRANOLA_ACTIONS_MIGRATION;
 }
 
+function isRlsError(err: unknown) {
+  return /42501|row-level security/i.test(publicErrorDetail(err));
+}
+
+function messageForStepError(err: ImportStepError) {
+  if (isRlsError(err.cause)) {
+    return "Supabase blocked the queue write with RLS. Set SUPABASE_SERVICE_ROLE_KEY in Vercel to the service_role key for this Supabase project.";
+  }
+
+  return err.message;
+}
+
 function missingEnv() {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return "Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to the same Supabase project.";
+  }
+
+  if (isPublicSupabaseServerKey()) {
+    const role = getSupabaseServiceKeyRole();
+    return `SUPABASE_SERVICE_ROLE_KEY is a ${role} key. Replace it in Vercel with the Supabase service_role key so server writes can bypass RLS.`;
   }
 
   if (!process.env.GRANOLA_API_KEY) {
@@ -263,11 +280,13 @@ export async function POST(req: NextRequest) {
     if (err instanceof ImportStepError) {
       return NextResponse.json(
         {
-          error: err.message,
-          code: isSupabaseSchemaError(err.cause) ? "missing_or_incompatible_supabase_schema" : "granola_import_failed",
+          error: messageForStepError(err),
+          code: isRlsError(err.cause)
+            ? "supabase_service_role_required"
+            : isSupabaseSchemaError(err.cause) ? "missing_or_incompatible_supabase_schema" : "granola_import_failed",
           step: err.step,
           detail: publicErrorDetail(err.cause),
-          migration: isSupabaseSchemaError(err.cause) ? migrationForStep(err.step) : undefined,
+          migration: isRlsError(err.cause) ? undefined : isSupabaseSchemaError(err.cause) ? migrationForStep(err.step) : undefined,
         },
         { status: 500 }
       );

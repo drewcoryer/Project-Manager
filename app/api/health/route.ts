@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { checkGranolaConnection } from "@/lib/granola";
 import { publicErrorDetail } from "@/lib/granola-db";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseServiceKeyRole, isPublicSupabaseServerKey, supabase } from "@/lib/supabase";
 
 type HealthCheck = {
   ok: boolean;
@@ -49,10 +49,29 @@ async function granolaCheck(): Promise<HealthCheck> {
   }
 }
 
+function serverKeyCheck(): HealthCheck {
+  const role = getSupabaseServiceKeyRole();
+
+  if (role === "missing") {
+    return { ok: false, label: "Supabase server key", detail: "SUPABASE_SERVICE_ROLE_KEY missing" };
+  }
+
+  if (isPublicSupabaseServerKey()) {
+    return {
+      ok: false,
+      label: "Supabase server key",
+      detail: `SUPABASE_SERVICE_ROLE_KEY is ${role}. Use the service_role key for server writes.`,
+    };
+  }
+
+  return { ok: true, label: "Supabase server key", detail: role };
+}
+
 export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const serverKey = serverKeyCheck();
   const [queue, clients, granolaActions, granola] = await Promise.all([
     tableCheck("queue_items", "Queue table"),
     tableCheck("clients", "Clients table"),
@@ -60,12 +79,13 @@ export async function GET() {
     granolaCheck(),
   ]);
 
-  const required = [queue, granola];
+  const required = [serverKey, queue, granola];
 
   return NextResponse.json({
     ok: required.every(check => check.ok),
     projectRef: supabaseProjectRef(),
     checks: {
+      serverKey,
       queue,
       clients,
       granolaActions,

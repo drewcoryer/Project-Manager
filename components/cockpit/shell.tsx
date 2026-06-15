@@ -99,6 +99,7 @@ type IntegrationHealth = {
   ok: boolean;
   projectRef: string | null;
   checks: {
+    serverKey: HealthCheck;
     queue: HealthCheck;
     clients: HealthCheck;
     granolaActions: HealthCheck;
@@ -264,7 +265,7 @@ function PriorityBadge({ priority }: { priority: QueuePriority }) {
 
 function healthProblem(health: IntegrationHealth | null) {
   if (!health) return null;
-  const required = [health.checks.queue, health.checks.granola];
+  const required = [health.checks.serverKey, health.checks.queue, health.checks.granola];
   const failing = required.find(check => !check.ok);
   if (failing) return `${failing.label}: ${failing.detail || "not connected"}`;
   if (!health.checks.clients.ok) return `${health.checks.clients.label}: ${health.checks.clients.detail || "not available"}`;

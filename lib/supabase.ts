@@ -9,6 +9,29 @@ export const supabase = createClient(
   supabaseServiceKey || "missing-service-role-key"
 );
 
+export function getSupabaseServiceKeyRole() {
+  if (!supabaseServiceKey) return "missing";
+  if (supabaseServiceKey.startsWith("sb_publishable_")) return "publishable";
+  if (supabaseServiceKey.startsWith("sb_secret_")) return "secret";
+
+  const [, payload] = supabaseServiceKey.split(".");
+  if (!payload) return "unknown";
+
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const decoded = JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+    return typeof decoded.role === "string" ? decoded.role : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+export function isPublicSupabaseServerKey() {
+  const role = getSupabaseServiceKeyRole();
+  return role === "anon" || role === "authenticated" || role === "publishable";
+}
+
 export type Client = {
   key: string;
   name: string;
