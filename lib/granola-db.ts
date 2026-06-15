@@ -92,7 +92,6 @@ export function toLegacyQueueRow(item: GranolaActionItem, index: number) {
     client_key: mapGranolaClientKey(item.clientKey),
     status: "ready",
     priority: priorityForGranolaClient(item.clientKey),
-    due_date: null,
     notes: [
       "Source: Granola",
       `Granola client: ${item.clientLabel}`,
