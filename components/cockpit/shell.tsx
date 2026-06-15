@@ -398,29 +398,42 @@ export function CockpitShell() {
 
     let liveCount = 0;
 
-    if (calendarResult.status === "fulfilled") {
-      setEvents(calendarResult.value.events);
+    const calendarEvents = calendarResult.status === "fulfilled" ? calendarResult.value.events : null;
+    const queueItems = queueResult.status === "fulfilled" ? queueResult.value.items : null;
+    const slackSummaries = slackResult.status === "fulfilled" ? slackResult.value.summaries : null;
+    const clientItems = clientsResult.status === "fulfilled" ? clientsResult.value.clients : null;
+
+    if (calendarEvents) {
+      setEvents(calendarEvents);
       liveCount += 1;
     }
 
-    if (queueResult.status === "fulfilled") {
-      setQueue(queueResult.value.items);
+    if (queueItems) {
+      setQueue(queueItems);
       liveCount += 1;
     }
 
-    if (slackResult.status === "fulfilled") {
-      setSlack(slackResult.value.summaries);
+    if (slackSummaries) {
+      setSlack(slackSummaries);
       liveCount += 1;
     }
 
-    if (clientsResult.status === "fulfilled") {
-      setClients(clientRecord(clientsResult.value.clients));
+    if (clientItems) {
+      setClients(clientRecord(clientItems));
       liveCount += 1;
     }
 
     setLastUpdated(new Date());
     setDataMode(liveCount > 0 ? "live" : "demo");
-    if (!silent) setSyncMessage(liveCount > 0 ? null : "Demo mode - connect auth and integrations for live data.");
+    if (!silent) {
+      if (liveCount === 0) {
+        setSyncMessage("Demo mode - connect auth and integrations for live data.");
+      } else {
+        const queueLabel = queueItems ? `${queueItems.length} queue` : "queue unavailable";
+        const clientLabel = clientItems ? `${clientItems.length} clients` : "clients unavailable";
+        setSyncMessage(`Live: ${queueLabel}, ${clientLabel}`);
+      }
+    }
     setIsRefreshing(false);
   }, []);
 
@@ -508,6 +521,10 @@ export function CockpitShell() {
     : queue.filter(item => item.client_key === queueFilter || (queueFilter === "internal" && !item.client_key));
   const openQueue = queue.filter(item => item.status !== "done");
   const attentionQueue = queue.filter(item => item.status !== "done" && needsAttention(item)).slice(0, 5);
+  const inboxQueue = openQueue
+    .filter(item => !attentionQueue.some(attentionItem => attentionItem.id === item.id))
+    .sort((a, b) => ({ p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority]))
+    .slice(0, 8);
   const attentionCount = attentionQueue.length + replyItems.length;
 
   const nowMin = clock.getHours() * 60 + clock.getMinutes();
@@ -679,6 +696,27 @@ export function CockpitShell() {
                       </div>
                       {index < attentionQueue.length - 1 && <Separator />}
                     </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-1.5"><ListChecks className="h-3.5 w-3.5" /> Work inbox</CardTitle>
+                  <Badge variant={openQueue.length > 0 ? "info" : "ghost"}>{openQueue.length} open</Badge>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {openQueue.length === 0 && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    No queue items loaded from the live API. Check that Vercel points at the same Supabase project and service-role key.
+                  </div>
+                )}
+                <div className="space-y-2">
+                  {(attentionQueue.length > 0 ? attentionQueue : inboxQueue).map(item => (
+                    <QueueCard key={item.id} item={item} clients={clients} onMove={moveQueueItem} />
                   ))}
                 </div>
               </CardContent>
@@ -856,10 +894,10 @@ export function CockpitShell() {
               })}
             </div>
 
-            {filteredQueue.some(item => item.link) && (
+            {filteredQueue.some(item => getQueueLink(item)) && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Link2 className="h-3.5 w-3.5" />
-                {filteredQueue.filter(item => item.link).length} linked source items
+                {filteredQueue.filter(item => getQueueLink(item)).length} linked source items
               </div>
             )}
           </TabsContent>
