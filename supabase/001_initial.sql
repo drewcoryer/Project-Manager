@@ -56,6 +56,13 @@ create table if not exists daily_priorities (
   unique(date, queue_item_id)
 );
 
+-- Lightweight API cache for expensive external pulls
+create table if not exists cache (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz not null default now()
+);
+
 -- Seed clients
 insert into clients (key, name, short_name, color, mrr, status) values
   ('charm', 'Charm / SKMR & Stable Kernel', 'Charm/SK', '#b45309', 4500, 'active'),

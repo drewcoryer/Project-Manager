@@ -6,6 +6,38 @@ import { supabase } from "@/lib/supabase";
 const CACHE_KEY = "granola_action_items";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
+async function readCache(clientKey: string | null) {
+  const { data: cached, error } = await supabase
+    .from("cache")
+    .select("value, updated_at")
+    .eq("key", CACHE_KEY)
+    .single();
+
+  if (error || !cached) return null;
+
+  const age = Date.now() - new Date(cached.updated_at).getTime();
+  if (age >= CACHE_TTL_MS) return null;
+
+  const items = JSON.parse(cached.value);
+  const filtered = clientKey
+    ? items.filter((i: { clientKey: string }) => i.clientKey === clientKey)
+    : items;
+
+  return { items: filtered, cached: true };
+}
+
+async function writeCache(items: unknown[]) {
+  const { error } = await supabase.from("cache").upsert({
+    key: CACHE_KEY,
+    value: JSON.stringify(items),
+    updated_at: new Date().toISOString(),
+  });
+
+  if (error) {
+    console.warn("Granola cache write skipped:", error.message);
+  }
+}
+
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -18,33 +50,15 @@ export async function GET(req: NextRequest) {
     if (type === "actions") {
       // Check cache
       if (!refresh) {
-        const { data: cached } = await supabase
-          .from("cache")
-          .select("value, updated_at")
-          .eq("key", CACHE_KEY)
-          .single();
-
-        if (cached) {
-          const age = Date.now() - new Date(cached.updated_at).getTime();
-          if (age < CACHE_TTL_MS) {
-            const items = JSON.parse(cached.value);
-            const filtered = clientKey
-              ? items.filter((i: { clientKey: string }) => i.clientKey === clientKey)
-              : items;
-            return NextResponse.json({ items: filtered, cached: true });
-          }
-        }
+        const cached = await readCache(clientKey);
+        if (cached) return NextResponse.json(cached);
       }
 
       // Fetch fresh from Granola REST API
       const items = await getActionItems(14);
 
       // Cache
-      await supabase.from("cache").upsert({
-        key: CACHE_KEY,
-        value: JSON.stringify(items),
-        updated_at: new Date().toISOString(),
-      });
+      await writeCache(items);
 
       const filtered = clientKey
         ? items.filter(i => i.clientKey === clientKey)
