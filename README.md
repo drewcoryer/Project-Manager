@@ -58,6 +58,11 @@ psql "$DATABASE_URL" -f supabase/001_initial.sql
 
 # 7. Add Granola API key to .env.local
 
+# 7b. Optional: Slack cockpit pings
+# - Add SLACK_PING_CHANNEL_ID for the channel or DM to receive pings
+# - Add SLACK_PING_TOKEN for a bot/user token, or connect a Slack workspace
+# - Add CRON_SECRET if you want /api/slack/ping called by a scheduler
+
 # 8. Run
 npm run dev
 
@@ -81,7 +86,9 @@ app/
     auth/callback/google/route.ts   # Google OAuth flow (multi-workspace)
     auth/callback/slack/route.ts    # Slack OAuth flow (multi-workspace)
     calendar/route.ts               # Unified calendar events
+    clients/route.ts                # Client config
     slack/route.ts                  # Slack summaries
+    slack/ping/route.ts             # Manual or cron-triggered attention digest pings
     granola/route.ts                # Meeting notes
     queue/route.ts                  # Production queue CRUD
     workspaces/route.ts             # Workspace management
@@ -113,7 +120,7 @@ supabase/
 |-------|---------|
 | clients | Client config (name, color, MRR, health) |
 | workspaces | OAuth tokens for Google Calendar + Slack connections |
-| queue_items | Production backlog with priority/status/client |
+| queue_items | Production backlog with priority/status/client/source/link/reminder metadata |
 | daily_priorities | Today's picked production items |
 
 ## Clients (seeded)

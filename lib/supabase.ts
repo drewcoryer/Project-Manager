@@ -1,8 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const isSupabaseConfigured = Boolean(supabaseUrl && supabaseServiceKey);
+
 export const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  supabaseUrl || "https://example.supabase.co",
+  supabaseServiceKey || "missing-service-role-key"
 );
 
 export type Client = {
@@ -23,12 +27,23 @@ export type QueueItem = {
   client_key: string | null;
   status: "ready" | "in-progress" | "blocked" | "done";
   priority: "p0" | "p1" | "p2";
+  source: "manual" | "granola" | "slack" | "calendar";
+  link: string | null;
   due_date: string | null;
+  remind_at: string | null;
+  last_pinged_at: string | null;
   notes: string | null;
   sort_order: number;
 };
 
+function requireSupabaseConfig() {
+  if (!isSupabaseConfigured) {
+    throw new Error("Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+  }
+}
+
 export async function getClients(): Promise<Client[]> {
+  requireSupabaseConfig();
   const { data, error } = await supabase
     .from("clients")
     .select("*")
@@ -39,6 +54,7 @@ export async function getClients(): Promise<Client[]> {
 }
 
 export async function getQueueItems(clientKey?: string): Promise<QueueItem[]> {
+  requireSupabaseConfig();
   let query = supabase
     .from("queue_items")
     .select("*")
@@ -52,6 +68,7 @@ export async function getQueueItems(clientKey?: string): Promise<QueueItem[]> {
 }
 
 export async function upsertQueueItem(item: Partial<QueueItem> & { title: string }) {
+  requireSupabaseConfig();
   const { data, error } = await supabase
     .from("queue_items")
     .upsert(item)
@@ -62,8 +79,21 @@ export async function upsertQueueItem(item: Partial<QueueItem> & { title: string
 }
 
 export async function updateQueueItemStatus(id: string, status: QueueItem["status"]) {
+  requireSupabaseConfig();
   const updates: Record<string, unknown> = { status };
   if (status === "done") updates.completed_at = new Date().toISOString();
   const { error } = await supabase.from("queue_items").update(updates).eq("id", id);
+  if (error) throw error;
+}
+
+export async function markQueueItemsPinged(ids: string[]) {
+  if (ids.length === 0) return;
+  requireSupabaseConfig();
+
+  const { error } = await supabase
+    .from("queue_items")
+    .update({ last_pinged_at: new Date().toISOString() })
+    .in("id", ids);
+
   if (error) throw error;
 }

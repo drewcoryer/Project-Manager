@@ -18,6 +18,12 @@ export type SlackSummary = {
   recentByClient: Record<string, SlackMessage[]>;
 };
 
+export type SlackPingResult = {
+  channel: string;
+  ts: string | undefined;
+  workspace: string;
+};
+
 async function getSlackClient(workspaceId: string): Promise<WebClient | null> {
   const { data: ws } = await supabase
     .from("workspaces")
@@ -97,6 +103,43 @@ export async function getSlackSummaries(): Promise<SlackSummary[]> {
   }
 
   return summaries;
+}
+
+export async function sendSlackPing(text: string, channelId = process.env.SLACK_PING_CHANNEL_ID): Promise<SlackPingResult> {
+  if (!channelId) {
+    throw new Error("Set SLACK_PING_CHANNEL_ID to the Slack channel or DM that should receive cockpit pings.");
+  }
+
+  const envToken = process.env.SLACK_PING_TOKEN;
+  if (envToken) {
+    const client = new WebClient(envToken);
+    const res = await client.chat.postMessage({ channel: channelId, text });
+    return { channel: channelId, ts: res.ts, workspace: "env" };
+  }
+
+  let query = supabase
+    .from("workspaces")
+    .select("*")
+    .eq("type", "slack")
+    .eq("is_connected", true)
+    .not("access_token", "is", null)
+    .limit(1);
+
+  if (process.env.SLACK_PING_WORKSPACE_ID) {
+    query = query.eq("workspace_id", process.env.SLACK_PING_WORKSPACE_ID);
+  }
+
+  const { data: workspaces, error } = await query;
+  if (error) throw error;
+
+  const workspace = workspaces?.[0];
+  if (!workspace?.access_token) {
+    throw new Error("Connect a Slack workspace or set SLACK_PING_TOKEN before sending cockpit pings.");
+  }
+
+  const client = new WebClient(workspace.access_token);
+  const res = await client.chat.postMessage({ channel: channelId, text });
+  return { channel: channelId, ts: res.ts, workspace: workspace.name };
 }
 
 // Pull recent messages from specific channels (for client deep-dive)
