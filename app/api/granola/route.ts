@@ -13,7 +13,6 @@ type QueueGranolaRow = {
   id: string;
   title: string;
   client_key: string | null;
-  link: string | null;
   notes: string | null;
 };
 
@@ -25,8 +24,7 @@ function noteField(notes: string | null, label: string) {
 async function readActionsFromQueue(clientKey: string | null) {
   let query = supabase
     .from("queue_items")
-    .select("id, title, client_key, link, notes")
-    .eq("source", "granola")
+    .select("id, title, client_key, notes")
     .neq("status", "done")
     .limit(200);
 
@@ -43,9 +41,9 @@ async function readActionsFromQueue(clientKey: string | null) {
     source: "granola" as const,
     noteId: "",
     noteTitle: noteField(row.notes, "Meeting") || "Untitled",
-    noteUrl: noteField(row.notes, "Note") || row.link || "",
+    noteUrl: noteField(row.notes, "Note") || "",
     meetingDate: noteField(row.notes, "Meeting date") || "",
-  }));
+  })).filter(item => Boolean(item.id.startsWith("granola-") || item.noteUrl));
 }
 
 export async function GET(req: NextRequest) {
