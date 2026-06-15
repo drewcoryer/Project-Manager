@@ -259,9 +259,20 @@ function MetricCard({ value, label, icon: Icon }: { value: string | number; labe
   );
 }
 
-function SourceBadge({ source }: { source: QueueSource | undefined }) {
-  const label = source || "manual";
-  return <Badge variant="ghost" className="text-[10px] capitalize">{label}</Badge>;
+function getQueueSource(item: QueueItem) {
+  if (item.source) return item.source;
+  const match = item.notes?.match(/^Source:\s*(.+)$/m);
+  return match?.[1]?.toLowerCase() || "manual";
+}
+
+function getQueueLink(item: QueueItem) {
+  if (item.link) return item.link;
+  const match = item.notes?.match(/^Note:\s*(https?:\/\/\S+)/m);
+  return match?.[1] || null;
+}
+
+function SourceBadge({ item }: { item: QueueItem }) {
+  return <Badge variant="ghost" className="text-[10px] capitalize">{getQueueSource(item)}</Badge>;
 }
 
 function QueueActions({
@@ -274,15 +285,16 @@ function QueueActions({
   const statusIndex = STATUS_FLOW.indexOf(item.status);
   const previous = STATUS_FLOW[statusIndex - 1];
   const next = STATUS_FLOW[statusIndex + 1];
+  const sourceLink = getQueueLink(item);
 
   return (
     <div className="flex items-center gap-1">
-      {item.link && (
-      <Button variant="ghost" size="icon" asChild title="Open source link">
-        <a href={item.link} target="_blank" rel="noopener">
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
-      </Button>
+      {sourceLink && (
+        <Button variant="ghost" size="icon" asChild title="Open source link">
+          <a href={sourceLink} target="_blank" rel="noopener">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </Button>
       )}
       <Button
         variant="ghost"
@@ -319,8 +331,9 @@ function QueueCard({
 }) {
   const due = formatDueDate(item.due_date);
   const tone = getDueTone(item.due_date);
-  const title = item.link ? (
-    <a href={item.link} target="_blank" rel="noopener" className="hover:text-foreground/70">
+  const sourceLink = getQueueLink(item);
+  const title = sourceLink ? (
+    <a href={sourceLink} target="_blank" rel="noopener" className="hover:text-foreground/70">
       {item.title}
     </a>
   ) : item.title;
@@ -329,7 +342,7 @@ function QueueCard({
     <div data-testid="queue-card" data-item-id={item.id} className="rounded-lg border bg-card p-3 shadow-sm">
       <div className="mb-2 flex items-center justify-between gap-2">
         <PriorityBadge priority={item.priority} />
-        <SourceBadge source={item.source} />
+        <SourceBadge item={item} />
       </div>
       <div className="text-sm font-medium leading-snug">{title}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
