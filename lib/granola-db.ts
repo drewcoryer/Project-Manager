@@ -1,6 +1,7 @@
 import type { GranolaActionItem } from "@/lib/granola";
 
 export const GRANOLA_ACTIONS_MIGRATION = "supabase/002_granola_actions.sql";
+export const SUPABASE_INITIAL_MIGRATION = "supabase/001_initial.sql";
 
 export const CLIENT_SEEDS = [
   { key: "charm", name: "Charm / SKMR & Stable Kernel", short_name: "Charm/SK", color: "#b45309", mrr: 4500, status: "active", health: "green" },
@@ -124,4 +125,10 @@ export function isSupabaseSchemaError(err: unknown) {
   const error = err as SupabaseLikeError;
   const text = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" ");
   return /(PGRST204|PGRST205|42P01|42P10|42703|granola_action_items|granola_action_id|schema cache|Could not find|no unique or exclusion constraint)/i.test(text);
+}
+
+export function publicErrorDetail(err: unknown) {
+  const error = err as SupabaseLikeError;
+  const text = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" - ");
+  return text || (err instanceof Error ? err.message : "Unknown error");
 }

@@ -89,9 +89,10 @@ export default function SettingsPage() {
       const warning = data.warning ? ` ${data.warning}` : "";
       setMessage(`Synced ${data.synced || 0} Granola actions to ${savedTo}. Added ${data.imported || 0} queue items (${data.skipped || 0} already existed).${warning}`);
     } else {
-      const message = data.migration
-        ? `${data.error} Run ${data.migration} in the Supabase project Vercel uses.`
-        : data.error || "Granola sync failed";
+      const step = data.step ? `${data.step}: ` : "";
+      const detail = data.detail && data.detail !== data.error ? ` (${data.detail})` : "";
+      const migration = data.migration ? ` Run ${data.migration} in the Supabase project Vercel uses.` : "";
+      const message = `${step}${data.error || "Granola sync failed"}${detail}${migration}`;
       setMessage(`Sync failed: ${message}`);
     }
 
