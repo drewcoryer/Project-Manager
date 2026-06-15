@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useState, type ComponentType, type DragEvent } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,9 @@ import { Separator } from "@/components/ui/separator";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   AlertTriangle,
+  Archive,
   ArrowLeft,
+  Ban,
   BellRing,
   CalendarDays,
   CheckCircle2,
@@ -18,6 +20,7 @@ import {
   Circle,
   Clock,
   ExternalLink,
+  GripVertical,
   Layers,
   Link2,
   ListChecks,
@@ -43,7 +46,7 @@ type CalendarEvent = {
   meetLink: string | null;
 };
 
-type QueueStatus = "ready" | "in-progress" | "blocked" | "done";
+type QueueStatus = "ready" | "in-progress" | "blocked" | "done" | "archived" | "cancelled";
 type QueuePriority = "p0" | "p1" | "p2";
 type QueueSource = "manual" | "granola" | "slack" | "calendar";
 
@@ -134,11 +137,14 @@ const DEMO_SLACK: SlackSummary[] = [
 ];
 
 const STATUS_FLOW: QueueStatus[] = ["ready", "in-progress", "blocked", "done"];
-const STATUS_COLUMNS: { key: QueueStatus; label: string; dot: string }[] = [
+const CLOSED_QUEUE_STATUSES: QueueStatus[] = ["done", "archived", "cancelled"];
+const STATUS_COLUMNS: { key: QueueStatus; label: string; dot: string; terminal?: boolean }[] = [
   { key: "ready", label: "Ready", dot: "bg-zinc-400" },
   { key: "in-progress", label: "In progress", dot: "bg-blue-500" },
   { key: "blocked", label: "Blocked", dot: "bg-red-500" },
   { key: "done", label: "Done", dot: "bg-emerald-500" },
+  { key: "archived", label: "Archived", dot: "bg-slate-500", terminal: true },
+  { key: "cancelled", label: "Cancelled", dot: "bg-orange-500", terminal: true },
 ];
 
 function dayKey(date: Date) {
@@ -274,8 +280,15 @@ function healthProblem(health: IntegrationHealth | null) {
 }
 
 function StatusBadge({ status }: { status: QueueStatus }) {
-  const variant = { "in-progress": "info" as const, ready: "success" as const, blocked: "destructive" as const, done: "ghost" as const };
-  const label = { "in-progress": "In progress", ready: "Ready", blocked: "Blocked", done: "Done" };
+  const variant = {
+    "in-progress": "info" as const,
+    ready: "success" as const,
+    blocked: "destructive" as const,
+    done: "ghost" as const,
+    archived: "outline" as const,
+    cancelled: "warning" as const,
+  };
+  const label = { "in-progress": "In progress", ready: "Ready", blocked: "Blocked", done: "Done", archived: "Archived", cancelled: "Cancelled" };
   return <Badge variant={variant[status]}>{label[status]}</Badge>;
 }
 
@@ -355,6 +368,26 @@ function QueueActions({
       >
         <ChevronRight className="h-3.5 w-3.5" />
       </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        disabled={item.status === "archived"}
+        onClick={() => onMove(item.id, "archived")}
+        title="Archive"
+        aria-label="Archive"
+      >
+        <Archive className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        disabled={item.status === "cancelled"}
+        onClick={() => onMove(item.id, "cancelled")}
+        title="Cancel"
+        aria-label="Cancel"
+      >
+        <Ban className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }
@@ -363,10 +396,16 @@ function QueueCard({
   item,
   clients,
   onMove,
+  draggable = false,
+  onDragStart,
+  onDragEnd,
 }: {
   item: QueueItem;
   clients: Record<string, ClientConfig>;
   onMove: (id: string, status: QueueStatus) => void;
+  draggable?: boolean;
+  onDragStart?: (item: QueueItem, event: DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: () => void;
 }) {
   const due = formatDueDate(item.due_date);
   const tone = getDueTone(item.due_date);
@@ -378,9 +417,19 @@ function QueueCard({
   ) : item.title;
 
   return (
-    <div data-testid="queue-card" data-item-id={item.id} className="rounded-lg border bg-card p-3 shadow-sm">
+    <div
+      data-testid="queue-card"
+      data-item-id={item.id}
+      draggable={draggable}
+      onDragStart={event => onDragStart?.(item, event)}
+      onDragEnd={onDragEnd}
+      className={`rounded-lg border bg-card p-3 shadow-sm ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <PriorityBadge priority={item.priority} />
+        <div className="flex items-center gap-1.5">
+          {draggable && <GripVertical className="h-3.5 w-3.5 text-muted-foreground/50" />}
+          <PriorityBadge priority={item.priority} />
+        </div>
         <SourceBadge item={item} />
       </div>
       <div className="text-sm font-medium leading-snug">{title}</div>
@@ -417,6 +466,7 @@ export function CockpitShell() {
   const [health, setHealth] = useState<IntegrationHealth | null>(null);
   const [pingState, setPingState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [granolaImporting, setGranolaImporting] = useState(false);
+  const [draggingQueueId, setDraggingQueueId] = useState<string | null>(null);
 
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setIsRefreshing(true);
@@ -424,7 +474,7 @@ export function CockpitShell() {
     const today = dayKey(new Date());
     const [calendarResult, queueResult, slackResult, clientsResult, healthResult] = await Promise.allSettled([
       fetchJson<{ events: CalendarEvent[] }>(`/api/calendar?date=${today}`),
-      fetchJson<{ items: QueueItem[] }>("/api/queue"),
+      fetchJson<{ items: QueueItem[] }>("/api/queue?includeClosed=true"),
       fetchJson<{ summaries: SlackSummary[] }>("/api/slack"),
       fetchJson<{ clients: Omit<ClientConfig, "bg">[] }>("/api/clients"),
       fetchJson<IntegrationHealth>("/api/health"),
@@ -533,7 +583,7 @@ export function CockpitShell() {
         body: JSON.stringify({ id, status }),
       });
       if (!res.ok) throw new Error("Queue update failed");
-      setSyncMessage(status === "done" ? "Marked done." : "Queue updated.");
+      setSyncMessage(CLOSED_QUEUE_STATUSES.includes(status) ? `Moved to ${status}.` : "Queue updated.");
     } catch {
       setQueue(previous);
       setSyncMessage("Could not update the live queue.");
@@ -591,8 +641,8 @@ export function CockpitShell() {
   const filteredQueue = queueFilter === "all"
     ? queue
     : queue.filter(item => item.client_key === queueFilter || (queueFilter === "internal" && !item.client_key));
-  const openQueue = queue.filter(item => item.status !== "done");
-  const attentionQueue = queue.filter(item => item.status !== "done" && needsAttention(item)).slice(0, 5);
+  const openQueue = queue.filter(item => !CLOSED_QUEUE_STATUSES.includes(item.status));
+  const attentionQueue = queue.filter(item => !CLOSED_QUEUE_STATUSES.includes(item.status) && needsAttention(item)).slice(0, 5);
   const inboxQueue = openQueue
     .filter(item => !attentionQueue.some(attentionItem => attentionItem.id === item.id))
     .sort((a, b) => ({ p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority]))
@@ -614,11 +664,29 @@ export function CockpitShell() {
       ? <Badge variant="ghost">Loading</Badge>
       : <Badge variant="warning">Demo</Badge>;
 
+  function handleQueueDragStart(item: QueueItem, event: DragEvent<HTMLDivElement>) {
+    setDraggingQueueId(item.id);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", item.id);
+    event.dataTransfer.setData("application/x-queue-item", item.id);
+  }
+
+  function handleQueueDrop(status: QueueStatus, event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const id = event.dataTransfer.getData("application/x-queue-item") || event.dataTransfer.getData("text/plain") || draggingQueueId;
+    setDraggingQueueId(null);
+    if (!id) return;
+
+    const item = queue.find(queueItem => queueItem.id === id);
+    if (!item || item.status === status) return;
+    void moveQueueItem(id, status);
+  }
+
   if (selectedClient) {
     const client = clients[selectedClient];
     if (!client) return null;
     const notes = granola[selectedClient];
-    const clientQueue = queue.filter(item => item.client_key === selectedClient && item.status !== "done");
+    const clientQueue = queue.filter(item => item.client_key === selectedClient && !CLOSED_QUEUE_STATUSES.includes(item.status));
 
     return (
       <TooltipProvider>
@@ -924,7 +992,7 @@ export function CockpitShell() {
                         </div>
                         <div className="mt-1.5 flex flex-wrap gap-4 text-xs text-muted-foreground">
                           <span>Last: {formatDueDate(granola[client.key]?.date || null) || "N/A"}</span>
-                          <span>{queue.filter(item => item.client_key === client.key && item.status !== "done").length} deliverables</span>
+                          <span>{queue.filter(item => item.client_key === client.key && !CLOSED_QUEUE_STATUSES.includes(item.status)).length} deliverables</span>
                           <span>{queue.filter(item => item.client_key === client.key && needsAttention(item)).length} attention</span>
                         </div>
                       </div>
@@ -954,30 +1022,48 @@ export function CockpitShell() {
               ))}
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-4">
-              {STATUS_COLUMNS.map(column => {
-                const columnItems = filteredQueue
-                  .filter(item => item.status === column.key)
-                  .sort((a, b) => ({ p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority]));
+            <div className="overflow-x-auto pb-2">
+              <div className="grid min-w-[1180px] grid-cols-6 gap-3">
+                {STATUS_COLUMNS.map(column => {
+                  const columnItems = filteredQueue
+                    .filter(item => item.status === column.key)
+                    .sort((a, b) => ({ p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority]));
 
-                return (
-                  <div key={column.key} className="rounded-lg border bg-muted/30">
-                    <div className="flex items-center justify-between border-b bg-background px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <span className={`h-2 w-2 rounded-full ${column.dot}`} />
-                        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{column.label}</span>
+                  return (
+                    <div
+                      key={column.key}
+                      onDragOver={event => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={event => handleQueueDrop(column.key, event)}
+                      className={`rounded-lg border bg-muted/30 transition-colors ${draggingQueueId ? "border-primary/30 bg-primary/[0.03]" : ""}`}
+                    >
+                      <div className="flex items-center justify-between border-b bg-background px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2 w-2 rounded-full ${column.dot}`} />
+                          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{column.label}</span>
+                        </div>
+                        <Badge variant={column.terminal ? "outline" : "ghost"} className="text-[10px] tabular-nums">{columnItems.length}</Badge>
                       </div>
-                      <Badge variant="ghost" className="text-[10px] tabular-nums">{columnItems.length}</Badge>
+                      <div className="min-h-[220px] space-y-2 p-2">
+                        {columnItems.length === 0 && <div className="px-2 py-6 text-center text-xs text-muted-foreground">Empty</div>}
+                        {columnItems.map(item => (
+                          <QueueCard
+                            key={item.id}
+                            item={item}
+                            clients={clients}
+                            onMove={moveQueueItem}
+                            draggable
+                            onDragStart={handleQueueDragStart}
+                            onDragEnd={() => setDraggingQueueId(null)}
+                          />
+                        ))}
+                      </div>
                     </div>
-                    <div className="min-h-[180px] space-y-2 p-2">
-                      {columnItems.length === 0 && <div className="px-2 py-6 text-center text-xs text-muted-foreground">Empty</div>}
-                      {columnItems.map(item => (
-                        <QueueCard key={item.id} item={item} clients={clients} onMove={moveQueueItem} />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
 
             {filteredQueue.some(item => getQueueLink(item)) && (

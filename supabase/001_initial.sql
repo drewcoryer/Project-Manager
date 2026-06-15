@@ -3,7 +3,7 @@ create table if not exists queue_items (
   id uuid primary key default gen_random_uuid(),
   title text not null,
   client_key text,
-  status text not null default 'ready' check (status in ('ready', 'in-progress', 'blocked', 'done')),
+  status text not null default 'ready' check (status in ('ready', 'in-progress', 'blocked', 'done', 'archived', 'cancelled')),
   priority text not null default 'p2' check (priority in ('p0', 'p1', 'p2')),
   source text not null default 'manual' check (source in ('manual', 'granola', 'slack', 'calendar')),
   link text,

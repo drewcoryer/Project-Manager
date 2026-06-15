@@ -4,6 +4,10 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const isSupabaseConfigured = Boolean(supabaseUrl && supabaseServiceKey);
 
+export const QUEUE_STATUSES = ["ready", "in-progress", "blocked", "done", "archived", "cancelled"] as const;
+export type QueueStatus = typeof QUEUE_STATUSES[number];
+export const CLOSED_QUEUE_STATUSES: QueueStatus[] = ["done", "archived", "cancelled"];
+
 export const supabase = createClient(
   supabaseUrl || "https://example.supabase.co",
   supabaseServiceKey || "missing-service-role-key"
@@ -48,7 +52,7 @@ export type QueueItem = {
   id: string;
   title: string;
   client_key: string | null;
-  status: "ready" | "in-progress" | "blocked" | "done";
+  status: QueueStatus;
   priority: "p0" | "p1" | "p2";
   source: "manual" | "granola" | "slack" | "calendar";
   link: string | null;
@@ -76,14 +80,18 @@ export async function getClients(): Promise<Client[]> {
   return data;
 }
 
-export async function getQueueItems(clientKey?: string): Promise<QueueItem[]> {
+export async function getQueueItems(clientKey?: string, options: { includeClosed?: boolean } = {}): Promise<QueueItem[]> {
   requireSupabaseConfig();
   let query = supabase
     .from("queue_items")
     .select("*")
-    .neq("status", "done")
     .order("priority")
     .order("sort_order");
+  if (!options.includeClosed) {
+    for (const status of CLOSED_QUEUE_STATUSES) {
+      query = query.neq("status", status);
+    }
+  }
   if (clientKey) query = query.eq("client_key", clientKey);
   const { data, error } = await query;
   if (error) throw error;
@@ -101,10 +109,10 @@ export async function upsertQueueItem(item: Partial<QueueItem> & { title: string
   return data;
 }
 
-export async function updateQueueItemStatus(id: string, status: QueueItem["status"]) {
+export async function updateQueueItemStatus(id: string, status: QueueStatus) {
   requireSupabaseConfig();
   const updates: Record<string, unknown> = { status };
-  if (status === "done") updates.completed_at = new Date().toISOString();
+  updates.completed_at = CLOSED_QUEUE_STATUSES.includes(status) ? new Date().toISOString() : null;
   const { error } = await supabase.from("queue_items").update(updates).eq("id", id);
   if (error) throw error;
 }

@@ -26,6 +26,8 @@ async function readActionsFromQueue(clientKey: string | null) {
     .from("queue_items")
     .select("id, title, client_key, notes")
     .neq("status", "done")
+    .neq("status", "archived")
+    .neq("status", "cancelled")
     .limit(200);
 
   if (clientKey) query = query.eq("client_key", clientKey);
