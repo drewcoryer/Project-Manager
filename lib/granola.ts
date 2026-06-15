@@ -121,6 +121,16 @@ export async function getNote(noteId: string): Promise<GranolaNote | null> {
   return res.json();
 }
 
+export async function checkGranolaConnection() {
+  const res = await granolaFetch("/notes?page_size=1");
+  if (!res.ok) {
+    throw new Error(`Granola returned ${res.status}`);
+  }
+
+  const data = await res.json();
+  return { notes: Array.isArray(data.notes) ? data.notes.length : 0 };
+}
+
 // ---- Action item extraction ----
 // Parses bullet points from summary_markdown that look like action items
 function extractActionItems(markdown: string): string[] {

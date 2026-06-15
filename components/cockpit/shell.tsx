@@ -88,6 +88,24 @@ type SlackSummary = {
   needsReply: { text: string; channelName: string; user: string; permalink: string | null }[];
 };
 
+type HealthCheck = {
+  ok: boolean;
+  label: string;
+  count?: number | null;
+  detail?: string;
+};
+
+type IntegrationHealth = {
+  ok: boolean;
+  projectRef: string | null;
+  checks: {
+    queue: HealthCheck;
+    clients: HealthCheck;
+    granolaActions: HealthCheck;
+    granola: HealthCheck;
+  };
+};
+
 type DataMode = "loading" | "live" | "demo" | "error";
 
 const DEFAULT_CLIENTS: Record<string, ClientConfig> = {
@@ -244,6 +262,16 @@ function PriorityBadge({ priority }: { priority: QueuePriority }) {
   return <Badge variant={variant[priority]} className="font-mono text-[10px] uppercase">{priority}</Badge>;
 }
 
+function healthProblem(health: IntegrationHealth | null) {
+  if (!health) return null;
+  const required = [health.checks.queue, health.checks.granola];
+  const failing = required.find(check => !check.ok);
+  if (failing) return `${failing.label}: ${failing.detail || "not connected"}`;
+  if (!health.checks.clients.ok) return `${health.checks.clients.label}: ${health.checks.clients.detail || "not available"}`;
+  if (!health.checks.granolaActions.ok) return `${health.checks.granolaActions.label}: optional migration not applied`;
+  return null;
+}
+
 function StatusBadge({ status }: { status: QueueStatus }) {
   const variant = { "in-progress": "info" as const, ready: "success" as const, blocked: "destructive" as const, done: "ghost" as const };
   const label = { "in-progress": "In progress", ready: "Ready", blocked: "Blocked", done: "Done" };
@@ -385,6 +413,7 @@ export function CockpitShell() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [health, setHealth] = useState<IntegrationHealth | null>(null);
   const [pingState, setPingState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [granolaImporting, setGranolaImporting] = useState(false);
 
@@ -392,11 +421,12 @@ export function CockpitShell() {
     if (!silent) setIsRefreshing(true);
 
     const today = dayKey(new Date());
-    const [calendarResult, queueResult, slackResult, clientsResult] = await Promise.allSettled([
+    const [calendarResult, queueResult, slackResult, clientsResult, healthResult] = await Promise.allSettled([
       fetchJson<{ events: CalendarEvent[] }>(`/api/calendar?date=${today}`),
       fetchJson<{ items: QueueItem[] }>("/api/queue"),
       fetchJson<{ summaries: SlackSummary[] }>("/api/slack"),
       fetchJson<{ clients: Omit<ClientConfig, "bg">[] }>("/api/clients"),
+      fetchJson<IntegrationHealth>("/api/health"),
     ]);
 
     let liveCount = 0;
@@ -405,6 +435,7 @@ export function CockpitShell() {
     const queueItems = queueResult.status === "fulfilled" ? queueResult.value.items : null;
     const slackSummaries = slackResult.status === "fulfilled" ? slackResult.value.summaries : null;
     const clientItems = clientsResult.status === "fulfilled" ? clientsResult.value.clients : null;
+    const healthStatus = healthResult.status === "fulfilled" ? healthResult.value : null;
 
     if (calendarEvents) {
       setEvents(calendarEvents);
@@ -426,6 +457,7 @@ export function CockpitShell() {
       liveCount += 1;
     }
 
+    setHealth(healthStatus);
     setLastUpdated(new Date());
     setDataMode(liveCount > 0 ? "live" : "demo");
     if (!silent) {
@@ -438,7 +470,9 @@ export function CockpitShell() {
       } else {
         const queueLabel = queueItems ? `${queueItems.length} queue` : "queue unavailable";
         const clientLabel = clientItems ? `${clientItems.length} clients` : "clients unavailable";
-        setSyncMessage(`Live: ${queueLabel}, ${clientLabel}`);
+        const healthLabel = healthStatus?.projectRef ? `Supabase ${healthStatus.projectRef}` : "Supabase unknown";
+        const issue = healthProblem(healthStatus);
+        setSyncMessage(issue ? `${healthLabel}: ${issue}` : `Live: ${queueLabel}, ${clientLabel}`);
       }
     }
     setIsRefreshing(false);
@@ -563,6 +597,7 @@ export function CockpitShell() {
     .sort((a, b) => ({ p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority]))
     .slice(0, 8);
   const attentionCount = attentionQueue.length + replyItems.length;
+  const healthIssue = healthProblem(health);
 
   const nowMin = clock.getHours() * 60 + clock.getMinutes();
   const currentEvent = events.find(event => {
@@ -753,7 +788,11 @@ export function CockpitShell() {
                 )}
                 {dataMode === "live" && openQueue.length === 0 && (
                   <div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
-                    <span>This Supabase has no queue items yet. Sync Granola actions into this live database.</span>
+                    <span>
+                      {healthIssue
+                        ? `Live check: ${healthIssue}`
+                        : "This Supabase has no queue items yet. Sync Granola actions into this live database."}
+                    </span>
                     <Button variant="outline" size="sm" onClick={() => void importGranolaActions()} disabled={granolaImporting} className="shrink-0 gap-1 bg-white">
                       <RefreshCw className={`h-3 w-3 ${granolaImporting ? "animate-spin" : ""}`} />
                       Sync Granola

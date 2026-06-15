@@ -21,6 +21,19 @@ type Workspace = {
   last_synced_at: string | null;
 };
 
+type HealthCheck = {
+  ok: boolean;
+  label: string;
+  count?: number | null;
+  detail?: string;
+};
+
+type IntegrationHealth = {
+  ok: boolean;
+  projectRef: string | null;
+  checks: Record<string, HealthCheck>;
+};
+
 const CLIENTS: Record<string, { name: string; color: string }> = {
   charm: { name: "Charm/SK", color: "#b45309" },
   coderpad: { name: "CoderPad", color: "#2563eb" },
@@ -33,9 +46,11 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [granolaImporting, setGranolaImporting] = useState(false);
+  const [health, setHealth] = useState<IntegrationHealth | null>(null);
 
   useEffect(() => {
     loadWorkspaces();
+    loadHealth();
     // Check URL params for connection status
     const params = new URLSearchParams(window.location.search);
     if (params.get("connected")) {
@@ -54,6 +69,14 @@ export default function SettingsPage() {
       setWorkspaces(data.workspaces || []);
     }
     setLoading(false);
+  }
+
+  async function loadHealth() {
+    const res = await fetch("/api/health");
+    if (res.ok) {
+      const data = await res.json();
+      setHealth(data);
+    }
   }
 
   async function disconnectWorkspace(id: string) {
@@ -88,12 +111,14 @@ export default function SettingsPage() {
       const savedTo = data.persisted === "queue_items" ? "queue DB" : "DB";
       const warning = data.warning ? ` ${data.warning}` : "";
       setMessage(`Synced ${data.synced || 0} Granola actions to ${savedTo}. Added ${data.imported || 0} queue items (${data.skipped || 0} already existed).${warning}`);
+      await loadHealth();
     } else {
       const step = data.step ? `${data.step}: ` : "";
       const detail = data.detail && data.detail !== data.error ? ` (${data.detail})` : "";
       const migration = data.migration ? ` Run ${data.migration} in the Supabase project Vercel uses.` : "";
       const message = `${step}${data.error || "Granola sync failed"}${detail}${migration}`;
       setMessage(`Sync failed: ${message}`);
+      await loadHealth();
     }
 
     setGranolaImporting(false);
@@ -123,6 +148,34 @@ export default function SettingsPage() {
           {message.includes("failed") ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />}
           {message}
         </div>
+      )}
+
+      {health && (
+        <Card className="mb-4">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2"><Wifi className="w-4 h-4" /> Integration Health</span>
+              <Badge variant={health.ok ? "success" : "warning"}>
+                {health.projectRef ? `Supabase ${health.projectRef}` : "Supabase unknown"}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {Object.entries(health.checks).map(([key, check]) => (
+                <div key={key} className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm">
+                  <div>
+                    <div className="font-medium">{check.label}</div>
+                    {check.detail && <div className="mt-0.5 text-[11px] text-muted-foreground break-words">{check.detail}</div>}
+                  </div>
+                  <Badge variant={check.ok ? "success" : "warning"} className="shrink-0">
+                    {check.ok ? (typeof check.count === "number" ? String(check.count) : "OK") : "Issue"}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Google Calendar Workspaces */}
