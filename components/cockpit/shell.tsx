@@ -104,6 +104,16 @@ const FALLBACK_GRANOLA: Record<string, GranolaMeeting> = {
   kopp: { id: "4", title: "Kopp Pipeline Review", date: "May 27", summary: "Pipeline review and outbound strategy check-in. Current verticals performing steady. Next: expand into adjacent segments.", clientKey: "kopp" },
 };
 
+const DEMO_SLACK: SlackSummary[] = [
+  {
+    workspace: "GTM Garden",
+    unreadMentions: 2,
+    needsReply: [
+      { text: "Hey Drew - can you review the Haus enrichment waterfall?", channelName: "haus-ops", user: "Chris Allen", permalink: null },
+    ],
+  },
+];
+
 const STATUS_FLOW: QueueStatus[] = ["ready", "in-progress", "blocked", "done"];
 const STATUS_COLUMNS: { key: QueueStatus; label: string; dot: string }[] = [
   { key: "ready", label: "Ready", dot: "bg-zinc-400" },
@@ -365,25 +375,18 @@ function QueueCard({
 export function CockpitShell() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [queueFilter, setQueueFilter] = useState("all");
-  const [events, setEvents] = useState<CalendarEvent[]>(() => makeMockEvents());
-  const [queue, setQueue] = useState<QueueItem[]>(() => makeMockQueue());
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [clients, setClients] = useState<Record<string, ClientConfig>>(DEFAULT_CLIENTS);
   const [granola, setGranola] = useState<Record<string, GranolaMeeting>>(FALLBACK_GRANOLA);
-  const [slack, setSlack] = useState<SlackSummary[]>([
-    {
-      workspace: "GTM Garden",
-      unreadMentions: 2,
-      needsReply: [
-        { text: "Hey Drew - can you review the Haus enrichment waterfall?", channelName: "haus-ops", user: "Chris Allen", permalink: null },
-      ],
-    },
-  ]);
+  const [slack, setSlack] = useState<SlackSummary[]>([]);
   const [clock, setClock] = useState(() => new Date());
   const [dataMode, setDataMode] = useState<DataMode>("loading");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [pingState, setPingState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [granolaImporting, setGranolaImporting] = useState(false);
 
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setIsRefreshing(true);
@@ -427,6 +430,10 @@ export function CockpitShell() {
     setDataMode(liveCount > 0 ? "live" : "demo");
     if (!silent) {
       if (liveCount === 0) {
+        setEvents(makeMockEvents());
+        setQueue(makeMockQueue());
+        setSlack(DEMO_SLACK);
+        setClients(DEFAULT_CLIENTS);
         setSyncMessage("Demo mode - connect auth and integrations for live data.");
       } else {
         const queueLabel = queueItems ? `${queueItems.length} queue` : "queue unavailable";
@@ -510,6 +517,28 @@ export function CockpitShell() {
       setPingState("error");
       setSyncMessage("Slack ping needs SLACK_PING_CHANNEL_ID and a connected Slack token.");
       window.setTimeout(() => setPingState("idle"), 5000);
+    }
+  }
+
+  async function importGranolaActions() {
+    setGranolaImporting(true);
+    setSyncMessage("Importing Granola actions...");
+
+    try {
+      const res = await fetch("/api/granola/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 7 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Granola import failed");
+
+      setSyncMessage(`Imported ${data.imported || 0} Granola actions. ${data.skipped || 0} already existed.`);
+      await loadData(true);
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : "Granola import failed.");
+    } finally {
+      setGranolaImporting(false);
     }
   }
 
@@ -709,9 +738,18 @@ export function CockpitShell() {
                 </div>
               </CardHeader>
               <CardContent>
-                {openQueue.length === 0 && (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                    No queue items loaded from the live API. Check that Vercel points at the same Supabase project and service-role key.
+                {dataMode === "loading" && (
+                  <div className="rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                    Loading live queue...
+                  </div>
+                )}
+                {dataMode === "live" && openQueue.length === 0 && (
+                  <div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
+                    <span>This Supabase has no queue items yet. Import Granola actions into this live database.</span>
+                    <Button variant="outline" size="sm" onClick={() => void importGranolaActions()} disabled={granolaImporting} className="shrink-0 gap-1 bg-white">
+                      <RefreshCw className={`h-3 w-3 ${granolaImporting ? "animate-spin" : ""}`} />
+                      Import Granola
+                    </Button>
                   </div>
                 )}
                 <div className="space-y-2">
