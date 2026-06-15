@@ -7,6 +7,7 @@ const isSupabaseConfigured = Boolean(supabaseUrl && supabaseServiceKey);
 export const QUEUE_STATUSES = ["ready", "in-progress", "blocked", "done", "archived", "cancelled"] as const;
 export type QueueStatus = typeof QUEUE_STATUSES[number];
 export const CLOSED_QUEUE_STATUSES: QueueStatus[] = ["done", "archived", "cancelled"];
+const TERMINAL_STATUS_RE = /^Queue terminal status:\s*(archived|cancelled)$/m;
 
 export const supabase = createClient(
   supabaseUrl || "https://example.supabase.co",
@@ -69,6 +70,40 @@ function requireSupabaseConfig() {
   }
 }
 
+function terminalStatusFromNotes(notes: string | null) {
+  const match = notes?.match(TERMINAL_STATUS_RE)?.[1];
+  return match === "archived" || match === "cancelled" ? match : null;
+}
+
+function stripTerminalStatus(notes: string | null) {
+  if (!notes) return notes;
+  const stripped = notes
+    .replace(TERMINAL_STATUS_RE, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return stripped || null;
+}
+
+function notesWithTerminalStatus(notes: string | null, status: Extract<QueueStatus, "archived" | "cancelled">) {
+  const base = stripTerminalStatus(notes);
+  return [base, `Queue terminal status: ${status}`].filter(Boolean).join("\n");
+}
+
+function normalizeQueueItem(row: QueueItem): QueueItem {
+  if (row.status === "done") {
+    const terminalStatus = terminalStatusFromNotes(row.notes);
+    if (terminalStatus) return { ...row, status: terminalStatus };
+  }
+
+  return row;
+}
+
+function isStatusConstraintError(error: unknown) {
+  const err = error as { code?: string; message?: string; details?: string; hint?: string };
+  const text = [err.code, err.message, err.details, err.hint].filter(Boolean).join(" ");
+  return /(23514|queue_items_status_check|violates check constraint|status)/i.test(text);
+}
+
 export async function getClients(): Promise<Client[]> {
   requireSupabaseConfig();
   const { data, error } = await supabase
@@ -95,7 +130,7 @@ export async function getQueueItems(clientKey?: string, options: { includeClosed
   if (clientKey) query = query.eq("client_key", clientKey);
   const { data, error } = await query;
   if (error) throw error;
-  return data;
+  return data.map(normalizeQueueItem);
 }
 
 export async function upsertQueueItem(item: Partial<QueueItem> & { title: string }) {
@@ -111,9 +146,30 @@ export async function upsertQueueItem(item: Partial<QueueItem> & { title: string
 
 export async function updateQueueItemStatus(id: string, status: QueueStatus) {
   requireSupabaseConfig();
-  const updates: Record<string, unknown> = { status };
-  updates.completed_at = CLOSED_QUEUE_STATUSES.includes(status) ? new Date().toISOString() : null;
+
+  const { data: current, error: readError } = await supabase
+    .from("queue_items")
+    .select("notes")
+    .eq("id", id)
+    .single();
+  if (readError) throw readError;
+
+  const notes = status === "archived" || status === "cancelled"
+    ? notesWithTerminalStatus(current.notes, status)
+    : stripTerminalStatus(current.notes);
+  const completedAt = CLOSED_QUEUE_STATUSES.includes(status) ? new Date().toISOString() : null;
+  const updates: Record<string, unknown> = { status, notes, completed_at: completedAt };
+
   const { error } = await supabase.from("queue_items").update(updates).eq("id", id);
+  if (error && (status === "archived" || status === "cancelled") && isStatusConstraintError(error)) {
+    const { error: fallbackError } = await supabase
+      .from("queue_items")
+      .update({ status: "done", notes, completed_at: completedAt })
+      .eq("id", id);
+    if (fallbackError) throw fallbackError;
+    return;
+  }
+
   if (error) throw error;
 }
 
