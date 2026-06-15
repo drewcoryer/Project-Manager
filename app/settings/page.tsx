@@ -85,9 +85,12 @@ export default function SettingsPage() {
     const data = await res.json().catch(() => ({}));
 
     if (res.ok) {
-      setMessage(`Imported ${data.imported || 0} Granola actions (${data.skipped || 0} already existed)`);
+      setMessage(`Synced ${data.synced || 0} Granola actions to DB. Added ${data.imported || 0} queue items (${data.skipped || 0} already existed).`);
     } else {
-      setMessage(`Connection failed: ${data.error || "Granola import failed"}`);
+      const message = data.migration
+        ? `${data.error} Run ${data.migration} in the Supabase project Vercel uses.`
+        : data.error || "Granola sync failed";
+      setMessage(`Sync failed: ${message}`);
     }
 
     setGranolaImporting(false);
@@ -257,7 +260,7 @@ export default function SettingsPage() {
                 </Badge>
                 <Button variant="outline" size="sm" onClick={() => void importGranolaActions()} disabled={granolaImporting} className="gap-1">
                   <RefreshCw className={`w-3 h-3 ${granolaImporting ? "animate-spin" : ""}`} />
-                  Import
+                  Sync
                 </Button>
               </div>
             </div>

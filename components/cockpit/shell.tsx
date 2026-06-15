@@ -522,7 +522,7 @@ export function CockpitShell() {
 
   async function importGranolaActions() {
     setGranolaImporting(true);
-    setSyncMessage("Importing Granola actions...");
+    setSyncMessage("Syncing Granola actions to Supabase...");
 
     try {
       const res = await fetch("/api/granola/import", {
@@ -531,12 +531,17 @@ export function CockpitShell() {
         body: JSON.stringify({ days: 7 }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Granola import failed");
+      if (!res.ok) {
+        const message = data.migration
+          ? `${data.error} Run ${data.migration} in the Supabase project Vercel uses.`
+          : data.error || "Granola sync failed";
+        throw new Error(message);
+      }
 
-      setSyncMessage(`Imported ${data.imported || 0} Granola actions. ${data.skipped || 0} already existed.`);
+      setSyncMessage(`Synced ${data.synced || 0} Granola actions to DB. Added ${data.imported || 0} queue items; ${data.skipped || 0} already existed.`);
       await loadData(true);
     } catch (err) {
-      setSyncMessage(err instanceof Error ? err.message : "Granola import failed.");
+      setSyncMessage(err instanceof Error ? err.message : "Granola sync failed.");
     } finally {
       setGranolaImporting(false);
     }
@@ -745,10 +750,10 @@ export function CockpitShell() {
                 )}
                 {dataMode === "live" && openQueue.length === 0 && (
                   <div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
-                    <span>This Supabase has no queue items yet. Import Granola actions into this live database.</span>
+                    <span>This Supabase has no queue items yet. Sync Granola actions into this live database.</span>
                     <Button variant="outline" size="sm" onClick={() => void importGranolaActions()} disabled={granolaImporting} className="shrink-0 gap-1 bg-white">
                       <RefreshCw className={`h-3 w-3 ${granolaImporting ? "animate-spin" : ""}`} />
-                      Import Granola
+                      Sync Granola
                     </Button>
                   </div>
                 )}

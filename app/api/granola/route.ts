@@ -1,70 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { getActionItems, getLastClientNote } from "@/lib/granola";
+import { getLastClientNote } from "@/lib/granola";
+import {
+  fromGranolaActionRow,
+  GRANOLA_ACTIONS_MIGRATION,
+  isSupabaseSchemaError,
+  type GranolaActionRow,
+} from "@/lib/granola-db";
 import { supabase } from "@/lib/supabase";
-
-const CACHE_KEY = "granola_action_items";
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-async function readCache(clientKey: string | null) {
-  const { data: cached, error } = await supabase
-    .from("cache")
-    .select("value, updated_at")
-    .eq("key", CACHE_KEY)
-    .single();
-
-  if (error || !cached) return null;
-
-  const age = Date.now() - new Date(cached.updated_at).getTime();
-  if (age >= CACHE_TTL_MS) return null;
-
-  const items = JSON.parse(cached.value);
-  const filtered = clientKey
-    ? items.filter((i: { clientKey: string }) => i.clientKey === clientKey)
-    : items;
-
-  return { items: filtered, cached: true };
-}
-
-async function writeCache(items: unknown[]) {
-  const { error } = await supabase.from("cache").upsert({
-    key: CACHE_KEY,
-    value: JSON.stringify(items),
-    updated_at: new Date().toISOString(),
-  });
-
-  if (error) {
-    console.warn("Granola cache write skipped:", error.message);
-  }
-}
 
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const type = req.nextUrl.searchParams.get("type") || "actions";
-  const refresh = req.nextUrl.searchParams.get("refresh") === "true";
   const clientKey = req.nextUrl.searchParams.get("client");
 
   try {
     if (type === "actions") {
-      // Check cache
-      if (!refresh) {
-        const cached = await readCache(clientKey);
-        if (cached) return NextResponse.json(cached);
+      let query = supabase
+        .from("granola_action_items")
+        .select("id, action_text, granola_client_key, client_key, client_label, note_id, note_title, note_url, meeting_date, queue_item_id, raw, last_seen_at, imported_at")
+        .order("meeting_date", { ascending: false })
+        .order("imported_at", { ascending: false })
+        .limit(200);
+
+      if (clientKey) query = query.eq("client_key", clientKey);
+
+      const { data, error } = await query;
+      if (error) {
+        if (isSupabaseSchemaError(error)) {
+          return NextResponse.json(
+            {
+              error: "Granola actions are not in this Supabase project yet. Run the migration, then sync Granola.",
+              code: "missing_supabase_schema",
+              migration: GRANOLA_ACTIONS_MIGRATION,
+              items: [],
+            },
+            { status: 500 }
+          );
+        }
+
+        throw error;
       }
 
-      // Fetch fresh from Granola REST API
-      const items = await getActionItems(14);
-
-      // Cache
-      await writeCache(items);
-
-      const filtered = clientKey
-        ? items.filter(i => i.clientKey === clientKey)
-        : items;
-
-      return NextResponse.json({ items: filtered, cached: false });
+      const items = ((data || []) as GranolaActionRow[]).map(fromGranolaActionRow);
+      return NextResponse.json({ items, cached: false, source: "db" });
     }
 
     if (type === "notes" && clientKey) {
