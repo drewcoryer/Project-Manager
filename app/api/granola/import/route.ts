@@ -6,9 +6,11 @@ import {
   GRANOLA_ACTIONS_MIGRATION,
   isSupabaseSchemaError,
   toGranolaActionRow,
+  toLegacyQueueRow,
   toQueueRow,
 } from "@/lib/granola-db";
 import { supabase } from "@/lib/supabase";
+import type { GranolaActionItem } from "@/lib/granola";
 
 type QueueLinkRow = {
   id: string;
@@ -55,7 +57,6 @@ async function linkLegacyQueueItems(actionIds: string[]) {
     .from("queue_items")
     .select("id, notes, granola_action_id")
     .is("granola_action_id", null)
-    .not("notes", "is", null)
     .limit(500);
 
   if (error) throw error;
@@ -83,6 +84,103 @@ async function linkLegacyQueueItems(actionIds: string[]) {
   return legacyLinks.length;
 }
 
+function actionIdFromNotes(notes: string | null | undefined) {
+  return notes?.match(/^Action ID:\s*(.+)$/m)?.[1] || null;
+}
+
+async function syncQueueOnly(actions: GranolaActionItem[], detail?: string) {
+  const { data: existingRows, error: existingError } = await supabase
+    .from("queue_items")
+    .select("notes")
+    .limit(1000);
+
+  if (existingError) throw existingError;
+
+  const existingActionIds = new Set(
+    (existingRows || [])
+      .map(row => actionIdFromNotes(row.notes))
+      .filter(Boolean)
+  );
+
+  const rows = actions
+    .filter(item => !existingActionIds.has(item.id))
+    .map((item, index) => toLegacyQueueRow(item, index));
+
+  if (rows.length > 0) {
+    const { error: insertError } = await supabase.from("queue_items").insert(rows);
+    if (insertError) throw insertError;
+  }
+
+  return {
+    ok: true,
+    scanned: actions.length,
+    synced: actions.length,
+    imported: rows.length,
+    skipped: actions.length - rows.length,
+    linked: 0,
+    persisted: "queue_items",
+    code: "queue_only_granola_sync",
+    warning: "Granola actions were saved to queue_items. Run the migration for the dedicated granola_action_items table.",
+    detail,
+  };
+}
+
+async function syncNormalizedActions(actions: GranolaActionItem[], importedAt: string) {
+  const actionRows = actions.map(item => toGranolaActionRow(item, importedAt));
+  const { error: actionError } = await supabase
+    .from("granola_action_items")
+    .upsert(actionRows, { onConflict: "id" });
+
+  if (actionError) throw actionError;
+
+  const actionIds = actions.map(item => item.id);
+  const legacyLinked = await linkLegacyQueueItems(actionIds);
+  const queueRows = actions.map((item, index) => toQueueRow(item, index));
+  const { data: insertedQueueRows, error: queueError } = await supabase
+    .from("queue_items")
+    .upsert(queueRows, { onConflict: "granola_action_id", ignoreDuplicates: true })
+    .select("id, granola_action_id");
+
+  if (queueError) throw queueError;
+
+  const { data: queueLinks, error: queueLinkError } = await supabase
+    .from("queue_items")
+    .select("id, granola_action_id")
+    .in("granola_action_id", actionIds);
+
+  if (queueLinkError) throw queueLinkError;
+
+  const queueIdByActionId = new Map(
+    ((queueLinks || []) as QueueLinkRow[])
+      .filter(row => row.granola_action_id)
+      .map(row => [row.granola_action_id as string, row.id])
+  );
+
+  const linkedActionRows = actionRows.map(row => ({
+    ...row,
+    queue_item_id: queueIdByActionId.get(row.id) || null,
+  }));
+
+  const { error: linkError } = await supabase
+    .from("granola_action_items")
+    .upsert(linkedActionRows, { onConflict: "id" });
+
+  if (linkError) throw linkError;
+
+  const imported = insertedQueueRows?.length || 0;
+
+  return {
+    ok: true,
+    scanned: actions.length,
+    synced: actionRows.length,
+    imported,
+    linked: legacyLinked,
+    skipped: actions.length - imported,
+    source: "granola",
+    persisted: "granola_action_items",
+  };
+}
+
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -107,72 +205,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, scanned: 0, synced: 0, imported: 0, skipped: 0, days });
     }
 
-    const actionRows = actions.map(item => toGranolaActionRow(item, importedAt));
-    const { error: actionError } = await supabase
-      .from("granola_action_items")
-      .upsert(actionRows, { onConflict: "id" });
-
-    if (actionError) {
-      if (isSupabaseSchemaError(actionError)) return schemaError(actionError.message);
-      throw actionError;
+    try {
+      return NextResponse.json({ ...(await syncNormalizedActions(actions, importedAt)), days });
+    } catch (syncError) {
+      if (!isSupabaseSchemaError(syncError)) throw syncError;
+      return NextResponse.json({
+        ...(await syncQueueOnly(actions, syncError instanceof Error ? syncError.message : undefined)),
+        days,
+        migration: GRANOLA_ACTIONS_MIGRATION,
+      });
     }
-
-    const actionIds = actions.map(item => item.id);
-    const legacyLinked = await linkLegacyQueueItems(actionIds);
-    const queueRows = actions.map((item, index) => toQueueRow(item, index));
-    const { data: insertedQueueRows, error: queueError } = await supabase
-      .from("queue_items")
-      .upsert(queueRows, { onConflict: "granola_action_id", ignoreDuplicates: true })
-      .select("id, granola_action_id");
-
-    if (queueError) {
-      if (isSupabaseSchemaError(queueError)) return schemaError(queueError.message);
-      throw queueError;
-    }
-
-    const { data: queueLinks, error: queueLinkError } = await supabase
-      .from("queue_items")
-      .select("id, granola_action_id")
-      .in("granola_action_id", actionIds);
-
-    if (queueLinkError) {
-      if (isSupabaseSchemaError(queueLinkError)) return schemaError(queueLinkError.message);
-      throw queueLinkError;
-    }
-
-    const queueIdByActionId = new Map(
-      ((queueLinks || []) as QueueLinkRow[])
-        .filter(row => row.granola_action_id)
-        .map(row => [row.granola_action_id as string, row.id])
-    );
-
-    const linkedActionRows = actionRows.map(row => ({
-      ...row,
-      queue_item_id: queueIdByActionId.get(row.id) || null,
-    }));
-
-    const { error: linkError } = await supabase
-      .from("granola_action_items")
-      .upsert(linkedActionRows, { onConflict: "id" });
-
-    if (linkError) {
-      if (isSupabaseSchemaError(linkError)) return schemaError(linkError.message);
-      throw linkError;
-    }
-
-    const imported = insertedQueueRows?.length || 0;
-
-    return NextResponse.json({
-      ok: true,
-      scanned: actions.length,
-      synced: actionRows.length,
-      imported,
-      linked: legacyLinked,
-      skipped: actions.length - imported,
-      days,
-      source: "granola",
-      persisted: "granola_action_items",
-    });
   } catch (err) {
     console.error("Granola import error:", err);
     if (isSupabaseSchemaError(err)) {

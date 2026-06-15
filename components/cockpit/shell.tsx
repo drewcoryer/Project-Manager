@@ -538,7 +538,9 @@ export function CockpitShell() {
         throw new Error(message);
       }
 
-      setSyncMessage(`Synced ${data.synced || 0} Granola actions to DB. Added ${data.imported || 0} queue items; ${data.skipped || 0} already existed.`);
+      const savedTo = data.persisted === "queue_items" ? "queue DB" : "DB";
+      const warning = data.warning ? ` ${data.warning}` : "";
+      setSyncMessage(`Synced ${data.synced || 0} Granola actions to ${savedTo}. Added ${data.imported || 0} queue items; ${data.skipped || 0} already existed.${warning}`);
       await loadData(true);
     } catch (err) {
       setSyncMessage(err instanceof Error ? err.message : "Granola sync failed.");

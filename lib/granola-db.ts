@@ -85,6 +85,27 @@ export function toQueueRow(item: GranolaActionItem, index: number) {
   };
 }
 
+export function toLegacyQueueRow(item: GranolaActionItem, index: number) {
+  return {
+    title: item.text,
+    client_key: mapGranolaClientKey(item.clientKey),
+    status: "ready",
+    priority: priorityForGranolaClient(item.clientKey),
+    source: "granola",
+    link: item.noteUrl || null,
+    due_date: null,
+    notes: [
+      "Source: Granola",
+      `Granola client: ${item.clientLabel}`,
+      `Meeting: ${item.noteTitle}`,
+      `Meeting date: ${item.meetingDate}`,
+      `Note: ${item.noteUrl}`,
+      `Action ID: ${item.id}`,
+    ].join("\n"),
+    sort_order: index,
+  };
+}
+
 export function fromGranolaActionRow(row: GranolaActionRow): GranolaActionItem {
   return {
     id: row.id,
@@ -102,5 +123,5 @@ export function fromGranolaActionRow(row: GranolaActionRow): GranolaActionItem {
 export function isSupabaseSchemaError(err: unknown) {
   const error = err as SupabaseLikeError;
   const text = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" ");
-  return /(PGRST204|PGRST205|42P01|42703|granola_action_items|granola_action_id|schema cache|Could not find)/i.test(text);
+  return /(PGRST204|PGRST205|42P01|42P10|42703|granola_action_items|granola_action_id|schema cache|Could not find|no unique or exclusion constraint)/i.test(text);
 }

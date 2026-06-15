@@ -85,7 +85,9 @@ export default function SettingsPage() {
     const data = await res.json().catch(() => ({}));
 
     if (res.ok) {
-      setMessage(`Synced ${data.synced || 0} Granola actions to DB. Added ${data.imported || 0} queue items (${data.skipped || 0} already existed).`);
+      const savedTo = data.persisted === "queue_items" ? "queue DB" : "DB";
+      const warning = data.warning ? ` ${data.warning}` : "";
+      setMessage(`Synced ${data.synced || 0} Granola actions to ${savedTo}. Added ${data.imported || 0} queue items (${data.skipped || 0} already existed).${warning}`);
     } else {
       const message = data.migration
         ? `${data.error} Run ${data.migration} in the Supabase project Vercel uses.`

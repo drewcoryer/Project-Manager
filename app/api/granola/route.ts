@@ -9,6 +9,45 @@ import {
 } from "@/lib/granola-db";
 import { supabase } from "@/lib/supabase";
 
+type QueueGranolaRow = {
+  id: string;
+  title: string;
+  client_key: string | null;
+  link: string | null;
+  notes: string | null;
+};
+
+function noteField(notes: string | null, label: string) {
+  const match = notes?.match(new RegExp(`^${label}:\\s*(.+)$`, "m"));
+  return match?.[1] || null;
+}
+
+async function readActionsFromQueue(clientKey: string | null) {
+  let query = supabase
+    .from("queue_items")
+    .select("id, title, client_key, link, notes")
+    .eq("source", "granola")
+    .neq("status", "done")
+    .limit(200);
+
+  if (clientKey) query = query.eq("client_key", clientKey);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  return ((data || []) as QueueGranolaRow[]).map(row => ({
+    id: noteField(row.notes, "Action ID") || row.id,
+    text: row.title,
+    clientKey: row.client_key || "internal",
+    clientLabel: noteField(row.notes, "Granola client") || row.client_key || "Internal",
+    source: "granola" as const,
+    noteId: "",
+    noteTitle: noteField(row.notes, "Meeting") || "Untitled",
+    noteUrl: noteField(row.notes, "Note") || row.link || "",
+    meetingDate: noteField(row.notes, "Meeting date") || "",
+  }));
+}
+
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -30,15 +69,14 @@ export async function GET(req: NextRequest) {
       const { data, error } = await query;
       if (error) {
         if (isSupabaseSchemaError(error)) {
-          return NextResponse.json(
-            {
-              error: "Granola actions are not in this Supabase project yet. Run the migration, then sync Granola.",
-              code: "missing_supabase_schema",
-              migration: GRANOLA_ACTIONS_MIGRATION,
-              items: [],
-            },
-            { status: 500 }
-          );
+          const items = await readActionsFromQueue(clientKey);
+          return NextResponse.json({
+            items,
+            cached: false,
+            source: "queue_items",
+            code: "queue_only_granola_actions",
+            migration: GRANOLA_ACTIONS_MIGRATION,
+          });
         }
 
         throw error;
