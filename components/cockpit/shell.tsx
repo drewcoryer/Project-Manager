@@ -55,6 +55,7 @@ type CalendarEvent = {
 type QueueStatus = "ready" | "in-progress" | "blocked" | "done" | "archived" | "cancelled";
 type QueuePriority = "p0" | "p1" | "p2";
 type QueueSource = "manual" | "granola" | "slack" | "calendar" | "gmail";
+type QueueSourceFilter = "all" | QueueSource;
 
 type QueueItem = {
   id: string;
@@ -136,6 +137,15 @@ type IntegrationHealth = {
 
 type DataMode = "loading" | "live" | "demo" | "error";
 type QueueView = "board" | "sheet";
+
+const SOURCE_FILTERS: { id: QueueSourceFilter; label: string }[] = [
+  { id: "all", label: "All sources" },
+  { id: "granola", label: "Granola" },
+  { id: "gmail", label: "Gmail" },
+  { id: "slack", label: "Slack" },
+  { id: "calendar", label: "Calendar" },
+  { id: "manual", label: "Manual" },
+];
 
 const DEFAULT_CLIENTS: Record<string, ClientConfig> = {
   charm: { key: "charm", name: "Charm / SKMR & Stable Kernel", short_name: "Charm/SK", color: "#b45309", bg: "#fffbeb", mrr: 4500, status: "active", health: "green" },
@@ -342,10 +352,17 @@ function MetricCard({ value, label, icon: Icon }: { value: string | number; labe
   );
 }
 
-function getQueueSource(item: QueueItem) {
+function normalizeQueueSource(source: string | null | undefined): QueueSource {
+  const clean = source?.toLowerCase();
+  return clean === "granola" || clean === "slack" || clean === "calendar" || clean === "gmail" || clean === "manual"
+    ? clean
+    : "manual";
+}
+
+function getQueueSource(item: QueueItem): QueueSource {
   if (item.source) return item.source;
   const match = item.notes?.match(/^Source:\s*(.+)$/m);
-  return match?.[1]?.toLowerCase() || "manual";
+  return normalizeQueueSource(match?.[1]);
 }
 
 function getQueueLink(item: QueueItem) {
@@ -943,6 +960,7 @@ function TriageCandidateInbox({
   onRun,
   onPromote,
   onDismiss,
+  onDismissAll,
 }: {
   candidates: TaskCandidate[];
   clients: Record<string, ClientConfig>;
@@ -951,8 +969,10 @@ function TriageCandidateInbox({
   onRun: () => void;
   onPromote: (id: string) => void;
   onDismiss: (id: string) => void;
+  onDismissAll: () => void;
 }) {
   const visible = candidates.slice(0, 6);
+  const isBusy = Boolean(busyId) || running;
 
   return (
     <Card>
@@ -963,6 +983,12 @@ function TriageCandidateInbox({
           </CardTitle>
           <div className="flex items-center gap-2">
             <Badge variant={candidates.length > 0 ? "warning" : "ghost"}>{candidates.length} pending</Badge>
+            {candidates.length > 0 && (
+              <Button variant="outline" size="sm" onClick={onDismissAll} disabled={isBusy} className="gap-1 text-orange-700">
+                <Ban className="h-3.5 w-3.5" />
+                Dismiss all
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={onRun} disabled={running} className="gap-1">
               <RefreshCw className={`h-3.5 w-3.5 ${running ? "animate-spin" : ""}`} />
               Run
@@ -1037,6 +1063,7 @@ function TriageCandidateInbox({
 export function CockpitShell() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [queueFilter, setQueueFilter] = useState("all");
+  const [queueSourceFilter, setQueueSourceFilter] = useState<QueueSourceFilter>("all");
   const [queueView, setQueueView] = useState<QueueView>("board");
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
   const [selectedQueueIds, setSelectedQueueIds] = useState<string[]>([]);
@@ -1450,12 +1477,42 @@ export function CockpitShell() {
     }
   }
 
+  async function dismissAllTriageCandidates() {
+    if (triageCandidates.length === 0) return;
+    const confirmed = window.confirm(`Dismiss all ${triageCandidates.length} pending AI candidates? This will not delete real queue tasks.`);
+    if (!confirmed) return;
+
+    setTriageRunning(true);
+    try {
+      const res = await fetch("/api/triage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dismiss_all_pending" }),
+      });
+      const data = await res.json().catch(() => ({})) as { dismissed?: number; error?: string; migration?: string };
+      if (!res.ok) {
+        const migration = data.migration ? ` Run ${data.migration}.` : "";
+        throw new Error(`${data.error || "Could not dismiss pending candidates."}${migration}`);
+      }
+
+      setTriageCandidates([]);
+      setSyncMessage(`Dismissed ${data.dismissed || triageCandidates.length} pending AI candidates.`);
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : "Could not dismiss pending candidates.");
+    } finally {
+      setTriageRunning(false);
+    }
+  }
+
   const totalMRR = Object.values(clients).reduce((sum, client) => sum + client.mrr, 0);
   const totalMentions = slack.reduce((sum, ws) => sum + ws.unreadMentions, 0);
   const replyItems = slack.flatMap(summary => summary.needsReply.map(message => ({ ...message, workspace: summary.workspace })));
-  const filteredQueue = queueFilter === "all"
+  const clientFilteredQueue = queueFilter === "all"
     ? queue
     : queue.filter(item => item.client_key === queueFilter || (queueFilter === "internal" && !item.client_key));
+  const filteredQueue = queueSourceFilter === "all"
+    ? clientFilteredQueue
+    : clientFilteredQueue.filter(item => getQueueSource(item) === queueSourceFilter);
   const filteredQueueIds = filteredQueue.map(item => item.id);
   const selectedQueueIdSet = new Set(selectedQueueIds);
   const openQueue = queue.filter(item => !CLOSED_QUEUE_STATUSES.includes(item.status));
@@ -1880,7 +1937,22 @@ export function CockpitShell() {
               onRun={() => void runTriageNow()}
               onPromote={id => void promoteTriageCandidate(id)}
               onDismiss={id => void dismissTriageCandidate(id)}
+              onDismissAll={() => void dismissAllTriageCandidates()}
             />
+
+            <div className="flex flex-wrap gap-1.5">
+              {SOURCE_FILTERS.map(filter => (
+                <Button
+                  key={filter.id}
+                  variant={queueSourceFilter === filter.id ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setQueueSourceFilter(filter.id)}
+                  className="h-7 text-xs"
+                >
+                  {filter.label}
+                </Button>
+              ))}
+            </div>
 
             <BulkQueueBar
               selectedCount={selectedQueueIds.length}

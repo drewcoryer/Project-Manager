@@ -115,6 +115,19 @@ function normalizeConfidence(value: unknown) {
   return Math.max(0, Math.min(1, confidence));
 }
 
+const TASK_VERB_RE = /\b(send|build|create|review|set up|confirm|draft|prepare|share|update|schedule|connect|finalize|research|run|add|check|sync|deliver|finish|fix|write|publish|launch|decide|reply|email|call|book|remove|archive|cancel|approve|test|deploy|follow up|circle back)\b/i;
+const TASK_COMMITMENT_RE = /\b(i|i'll|i will|we will|drew will|you will|needs? to|need you to|should|must|owner|assigned to|due|by eod|tomorrow|next week|follow up|action item|todo|to-do|blocked by|waiting on)\b/i;
+const TASK_IMPERATIVE_RE = /^(send|build|create|review|set up|confirm|draft|prepare|share|update|schedule|connect|finalize|research|run|add|check|sync|deliver|finish|fix|write|publish|launch|decide|reply|email|call|book|remove|archive|cancel|approve|test|deploy|follow up|circle back)\b/i;
+const TASK_NOISE_RE = /\b(newsletter|digest|promotion|receipt|invoice paid|calendar invite|accepted:|declined:|agenda|recap|summary|fyi|for your information|mentioned|discussed|talked through|covered|brainstormed|idea|risk|concern|takeaway|context only)\b/i;
+
+function isConcreteTaskText(...parts: Array<string | null | undefined>) {
+  const text = parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  if (text.length < 8 || text.length > 500) return false;
+  if (TASK_NOISE_RE.test(text) && !TASK_COMMITMENT_RE.test(text)) return false;
+  if (!TASK_VERB_RE.test(text)) return false;
+  return TASK_IMPERATIVE_RE.test(text) || TASK_COMMITMENT_RE.test(text);
+}
+
 function base64UrlDecode(value: string) {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
@@ -381,8 +394,9 @@ function candidatePrompt(event: RawEventRow) {
   return [
     "You are triaging Drew's personal work inbox.",
     "Extract only real tasks Drew should consider doing.",
-    "Do not create tasks for FYI, newsletters, automated reminders, vague ideas, or normal meeting attendance.",
-    "Return no task unless the source has a concrete ask, commitment, follow-up, blocker, deadline, or reply needed.",
+    "A task must be an explicit ask, commitment, blocker, reply, deadline, deliverable, or scheduled follow-up.",
+    "Do not create tasks for FYI, newsletters, automated reminders, meeting attendance, agendas, recap bullets, vague ideas, risks, or discussion summaries.",
+    "When unsure, return zero tasks.",
     "",
     `Source: ${event.source}`,
     `Client key hint: ${event.client_key || "unknown"}`,
@@ -414,7 +428,12 @@ async function extractCandidate(event: RawEventRow): Promise<CandidateExtraction
       messages: [
         {
           role: "system",
-          content: "Return JSON only with a tasks array. Each task must include should_create_task, title, description, client_key, priority p0/p1/p2, due_date YYYY-MM-DD or null, confidence 0-1, evidence, and reason.",
+          content: [
+            "Return JSON only with a tasks array.",
+            "Only include a task when the source contains a concrete action Drew should take or track.",
+            "Each task must include should_create_task, title, description, client_key, priority p0/p1/p2, due_date YYYY-MM-DD or null, confidence 0-1, evidence, and reason.",
+            "Set should_create_task false for recap lines, topics discussed, ideas, FYIs, newsletters, notifications, and normal calendar attendance.",
+          ].join(" "),
         },
         { role: "user", content: candidatePrompt(event) },
       ],
@@ -426,7 +445,7 @@ async function extractCandidate(event: RawEventRow): Promise<CandidateExtraction
   const raw = data.choices?.[0]?.message?.content;
   const parsed = raw ? JSON.parse(raw) : {};
   const tasks: Record<string, unknown>[] = Array.isArray(parsed.tasks) ? parsed.tasks : [];
-  const minConfidence = Number(process.env.TRIAGE_MIN_CONFIDENCE || 0.55);
+  const minConfidence = Number(process.env.TRIAGE_MIN_CONFIDENCE || 0.82);
 
   return tasks
     .map((task: Record<string, unknown>) => ({
@@ -440,7 +459,12 @@ async function extractCandidate(event: RawEventRow): Promise<CandidateExtraction
       evidence: typeof task.evidence === "string" ? task.evidence.trim() : null,
       reason: typeof task.reason === "string" ? task.reason.trim() : null,
     }))
-    .filter(task => task.should_create_task && task.title.length > 4 && task.confidence >= minConfidence);
+    .filter(task =>
+      task.should_create_task
+      && task.title.length > 4
+      && task.confidence >= minConfidence
+      && isConcreteTaskText(task.title, task.description, task.evidence)
+    );
 }
 
 async function upsertCandidates(event: RawEventRow, candidates: CandidateExtraction[]) {
@@ -525,7 +549,7 @@ export async function listTaskCandidates(status = "pending") {
     .eq("status", status)
     .order("confidence", { ascending: false })
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(500);
 
   if (error) throw new TriageStepError("task_candidates_list", error);
   return (data || []) as TaskCandidateRow[];
@@ -595,6 +619,21 @@ export async function dismissTaskCandidates(ids: string[]) {
 
   if (error) throw new TriageStepError("task_candidate_dismiss", error);
   return count ?? cleanIds.length;
+}
+
+export async function dismissPendingTaskCandidates(source?: string | null) {
+  let query = supabase
+    .from("task_candidates")
+    .update({ status: "dismissed", dismissed_at: new Date().toISOString() }, { count: "exact" })
+    .eq("status", "pending");
+
+  if (source && ["granola", "gmail", "calendar", "slack", "manual"].includes(source)) {
+    query = query.eq("source", source);
+  }
+
+  const { count, error } = await query;
+  if (error) throw new TriageStepError("task_candidates_dismiss_pending", error);
+  return count ?? 0;
 }
 
 export function migrationForTriageError(err: unknown) {

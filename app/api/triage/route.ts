@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { publicErrorDetail } from "@/lib/granola-db";
 import {
+  dismissPendingTaskCandidates,
   dismissTaskCandidates,
   listTaskCandidates,
   migrationForTriageError,
@@ -47,7 +48,7 @@ export async function PATCH(req: NextRequest) {
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = await req.json() as { action?: string; id?: string; ids?: string[] };
+    const body = await req.json() as { action?: string; id?: string; ids?: string[]; source?: string };
     if (body.action === "promote") {
       if (!body.id) return NextResponse.json({ error: "Missing candidate id" }, { status: 400 });
       const item = await promoteTaskCandidate(body.id);
@@ -57,6 +58,11 @@ export async function PATCH(req: NextRequest) {
     if (body.action === "dismiss") {
       const ids = Array.isArray(body.ids) ? body.ids : body.id ? [body.id] : [];
       const dismissed = await dismissTaskCandidates(ids);
+      return NextResponse.json({ ok: true, dismissed });
+    }
+
+    if (body.action === "dismiss_all_pending") {
+      const dismissed = await dismissPendingTaskCandidates(typeof body.source === "string" ? body.source : null);
       return NextResponse.json({ ok: true, dismissed });
     }
 

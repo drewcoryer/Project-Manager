@@ -55,6 +55,7 @@ type ExtractedTask = {
   dueDate?: string | null;
   owner?: string | null;
   priority?: "p0" | "p1" | "p2";
+  confidence?: number | null;
 };
 
 const CLIENT_MAP: [RegExp, string][] = [
@@ -180,8 +181,24 @@ function isActionHeading(line: string) {
   return /^(#{1,6}\s*)?(action items?|next steps?|follow[- ]?ups?|to[- ]?dos?|tasks?|owners?|commitments?)\b/i.test(line);
 }
 
-function looksActionable(text: string) {
-  return /\b(to|will|should|need|needs|must|follow|send|build|create|review|set up|confirm|draft|prepare|share|update|schedule|connect|finalize|research|run|add|get|check|sync|own|deliver|finish|fix|write|publish|launch|decide|circle back)\b/i.test(text);
+const ACTION_VERB_RE = /\b(send|build|create|review|set up|confirm|draft|prepare|share|update|schedule|connect|finalize|research|run|add|check|sync|deliver|finish|fix|write|publish|launch|decide|reply|email|call|book|remove|archive|cancel|approve|test|deploy|follow up|circle back)\b/i;
+const COMMITMENT_RE = /\b(i|i'll|i will|we will|drew will|you will|needs? to|need you to|should|must|owner|assigned to|due|by eod|tomorrow|next week|follow up|action item|todo|to-do)\b/i;
+const IMPERATIVE_RE = /^(send|build|create|review|set up|confirm|draft|prepare|share|update|schedule|connect|finalize|research|run|add|check|sync|deliver|finish|fix|write|publish|launch|decide|reply|email|call|book|remove|archive|cancel|approve|test|deploy|follow up|circle back)\b/i;
+const NON_TASK_RE = /\b(discussed|talked through|covered|mentioned|noted|explored|brainstormed|reviewed that|decided that|recap|background|context|agenda|question|idea|consideration|opportunity|risk|concern|takeaway|summary|update only|fyi)\b/i;
+
+function isProbablyNotTask(text: string) {
+  if (text.length > 240) return true;
+  if (/^(notes?|summary|context|background|discussion|decision|question|idea|risk|concern|takeaway)s?:/i.test(text)) return true;
+  return NON_TASK_RE.test(text) && !COMMITMENT_RE.test(text);
+}
+
+function looksActionable(text: string, options: { inActionSection?: boolean } = {}) {
+  if (isProbablyNotTask(text)) return false;
+  const hasVerb = ACTION_VERB_RE.test(text);
+  if (!hasVerb) return false;
+  if (IMPERATIVE_RE.test(text)) return true;
+  if (COMMITMENT_RE.test(text)) return true;
+  return Boolean(options.inActionSection && /^(?:\w+\s+){0,3}(to|will|needs?|should|must)\b/i.test(text));
 }
 
 function extractDueDate(text: string, meetingDate: string) {
@@ -253,7 +270,7 @@ function ruleExtractActionTexts(markdown: string) {
     const bullet = trimmed.match(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(.+)$/);
     const checkbox = trimmed.match(/^\[[ xX]\]\s*(.+)$/);
     const candidate = normalizeActionText((bullet || checkbox)?.[1] || "");
-    if (candidate.length > 4 && (inActionSection || looksActionable(candidate))) {
+    if (candidate.length > 4 && looksActionable(candidate, { inActionSection })) {
       items.push(candidate);
     }
   }
@@ -297,7 +314,12 @@ async function openAiExtractActionTexts(
         messages: [
           {
             role: "system",
-            content: "Extract only concrete follow-up tasks from meeting notes. Return JSON with a tasks array. Each task has text, optional owner, optional dueDate as YYYY-MM-DD, and priority p0/p1/p2. Do not invent tasks.",
+            content: [
+              "Extract only explicit follow-up tasks from meeting notes.",
+              "A task must be a concrete deliverable, reply, decision, fix, send, build, review, or scheduled follow-up that someone committed to do.",
+              "Do not return meeting topics, discussion summaries, ideas, risks, decisions already made, FYIs, normal attendance, or vague next-step themes.",
+              "Return JSON with a tasks array. Each task has text, confidence 0-1, optional owner, optional dueDate as YYYY-MM-DD, and priority p0/p1/p2. Do not invent tasks.",
+            ].join(" "),
           },
           { role: "user", content: input },
         ],
@@ -314,13 +336,19 @@ async function openAiExtractActionTexts(
     const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
     return {
       items: tasks
-        .map((task: { text?: unknown; dueDate?: unknown; owner?: unknown; priority?: unknown }) => ({
+        .map((task: { text?: unknown; dueDate?: unknown; owner?: unknown; priority?: unknown; confidence?: unknown }) => ({
           text: normalizeActionText(String(task.text || "")),
           dueDate: typeof task.dueDate === "string" ? task.dueDate : null,
           owner: typeof task.owner === "string" ? task.owner : null,
           priority: task.priority === "p0" || task.priority === "p1" || task.priority === "p2" ? task.priority : undefined,
+          confidence: typeof task.confidence === "number" ? task.confidence : Number(task.confidence || 0),
         }))
-        .filter((task: { text: string }) => task.text.length > 4),
+        .filter((task: ExtractedTask) => {
+          const confidence = typeof task.confidence === "number" && Number.isFinite(task.confidence) ? task.confidence : 0;
+          return task.text.length > 4
+            && confidence >= Number(process.env.GRANOLA_MIN_TASK_CONFIDENCE || 0.78)
+            && looksActionable(task.text, { inActionSection: true });
+        }),
       warning: null,
     };
   } catch (err) {
@@ -356,10 +384,12 @@ export async function extractActionsFromNote(note: GranolaNote): Promise<Granola
       dueDate: item.dueDate || extractDueDate(item.text, meetingDate),
       owner: item.owner || extractOwner(item.text),
       priority: item.priority,
+      confidence: item.confidence || null,
     }));
   }
 
   const seen = new Set<string>();
+  const maxTasksPerNote = Math.max(1, Math.min(Number(process.env.GRANOLA_MAX_TASKS_PER_NOTE || 6), 20));
   const items = extracted
     .map(item => ({ ...item, text: normalizeActionText(item.text) }))
     .filter(item => {
@@ -368,6 +398,7 @@ export async function extractActionsFromNote(note: GranolaNote): Promise<Granola
       seen.add(key);
       return true;
     })
+    .slice(0, maxTasksPerNote)
     .map(item => ({
       id: stableActionId(note.id, item.text),
       text: item.text,
