@@ -6,6 +6,8 @@ const isSupabaseConfigured = Boolean(supabaseUrl && supabaseServiceKey);
 
 export const QUEUE_STATUSES = ["ready", "in-progress", "blocked", "done", "archived", "cancelled"] as const;
 export type QueueStatus = typeof QUEUE_STATUSES[number];
+export const QUEUE_PRIORITIES = ["p0", "p1", "p2"] as const;
+export type QueuePriority = typeof QUEUE_PRIORITIES[number];
 export const CLOSED_QUEUE_STATUSES: QueueStatus[] = ["done", "archived", "cancelled"];
 const TERMINAL_STATUS_RE = /^Queue terminal status:\s*(archived|cancelled)$/m;
 
@@ -54,7 +56,7 @@ export type QueueItem = {
   title: string;
   client_key: string | null;
   status: QueueStatus;
-  priority: "p0" | "p1" | "p2";
+  priority: QueuePriority;
   source: "manual" | "granola" | "slack" | "calendar";
   link: string | null;
   due_date: string | null;
@@ -68,6 +70,8 @@ export type QueueItem = {
   notes: string | null;
   sort_order: number;
 };
+
+export type QueueItemFieldUpdates = Partial<Pick<QueueItem, "title" | "client_key" | "priority" | "due_date">>;
 
 function requireSupabaseConfig() {
   if (!isSupabaseConfigured) {
@@ -189,6 +193,20 @@ export async function updateQueueItemStatus(id: string, status: QueueStatus) {
   }
 
   if (error) throw error;
+}
+
+export async function updateQueueItemFields(id: string, updates: QueueItemFieldUpdates) {
+  requireSupabaseConfig();
+
+  const { data, error } = await supabase
+    .from("queue_items")
+    .update(updates)
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return normalizeQueueItem(data);
 }
 
 export async function markQueueItemsPinged(ids: string[]) {

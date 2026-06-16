@@ -68,6 +68,8 @@ type QueueItem = {
   sort_order?: number;
 };
 
+type QueueItemEdit = Partial<Pick<QueueItem, "title" | "due_date" | "priority" | "client_key">>;
+
 type ClientConfig = {
   key: string;
   name: string;
@@ -216,6 +218,10 @@ function dueDayKey(value: string | null) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return dayKey(parsed);
+}
+
+function dateInputValue(value: string | null) {
+  return dueDayKey(value) || "";
 }
 
 function getDueTone(value: string | null) {
@@ -499,11 +505,13 @@ function TaskDetailPanel({
   clients,
   onClose,
   onMove,
+  onSave,
 }: {
   item: QueueItem;
   clients: Record<string, ClientConfig>;
   onClose: () => void;
   onMove: (id: string, status: QueueStatus) => void;
+  onSave: (id: string, updates: QueueItemEdit) => Promise<void> | void;
 }) {
   const sourceLink = getQueueLink(item);
   const context = taskContext(item);
@@ -513,6 +521,53 @@ function TaskDetailPanel({
   const meetingDate = noteField(item.notes, "Meeting date");
   const extraction = noteField(item.notes, "Extraction");
   const extractionWarning = noteField(item.notes, "Extraction warning");
+  const [draftTitle, setDraftTitle] = useState(item.title);
+  const [draftDueDate, setDraftDueDate] = useState(dateInputValue(item.due_date));
+  const [draftPriority, setDraftPriority] = useState<QueuePriority>(item.priority);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraftTitle(item.title);
+    setDraftDueDate(dateInputValue(item.due_date));
+    setDraftPriority(item.priority);
+    setSaveError(null);
+  }, [item.id, item.title, item.due_date, item.priority]);
+
+  const trimmedTitle = draftTitle.trim();
+  const currentDueDate = dateInputValue(item.due_date) || null;
+  const nextDueDate = draftDueDate || null;
+  const hasChanges = trimmedTitle !== item.title || nextDueDate !== currentDueDate || draftPriority !== item.priority;
+
+  function resetDraft() {
+    setDraftTitle(item.title);
+    setDraftDueDate(dateInputValue(item.due_date));
+    setDraftPriority(item.priority);
+    setSaveError(null);
+  }
+
+  async function saveChanges() {
+    if (!trimmedTitle) {
+      setSaveError("Task title is required.");
+      return;
+    }
+    if (!hasChanges || isSaving) return;
+
+    const updates: QueueItemEdit = {};
+    if (trimmedTitle !== item.title) updates.title = trimmedTitle;
+    if (nextDueDate !== currentDueDate) updates.due_date = nextDueDate;
+    if (draftPriority !== item.priority) updates.priority = draftPriority;
+
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(item.id, updates);
+    } catch {
+      setSaveError("Could not save this task. Try again in a second.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/30" onClick={onClose}>
@@ -561,6 +616,72 @@ function TaskDetailPanel({
                 Archive
               </Button>
             )}
+          </div>
+
+          <div className="rounded-lg border bg-muted/20 p-3">
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground" htmlFor={`task-title-${item.id}`}>
+              Task
+            </label>
+            <textarea
+              id={`task-title-${item.id}`}
+              value={draftTitle}
+              onChange={event => setDraftTitle(event.target.value)}
+              className="mt-1 min-h-[78px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-snug shadow-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
+            />
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground" htmlFor={`task-due-${item.id}`}>
+                  Due date
+                </label>
+                <div className="mt-1 flex gap-2">
+                  <input
+                    id={`task-due-${item.id}`}
+                    type="date"
+                    value={draftDueDate}
+                    onChange={event => setDraftDueDate(event.target.value)}
+                    className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm shadow-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
+                  />
+                  {draftDueDate && (
+                    <Button variant="ghost" size="sm" onClick={() => setDraftDueDate("")}>
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Priority</div>
+                <div className="mt-1 flex rounded-md border bg-background p-1">
+                  {(["p0", "p1", "p2"] as QueuePriority[]).map(priority => (
+                    <button
+                      key={priority}
+                      type="button"
+                      onClick={() => setDraftPriority(priority)}
+                      className={`h-7 flex-1 rounded px-2 text-xs font-mono uppercase transition ${
+                        draftPriority === priority
+                          ? "bg-primary text-primary-foreground shadow-sm"
+                          : "text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {priority}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              {saveError ? <div className="text-xs text-destructive">{saveError}</div> : <div className="text-xs text-muted-foreground">{hasChanges ? "Unsaved changes" : "Saved"}</div>}
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={resetDraft} disabled={!hasChanges || isSaving}>
+                  Reset
+                </Button>
+                <Button size="sm" onClick={() => void saveChanges()} disabled={!hasChanges || isSaving || !trimmedTitle} className="gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {isSaving ? "Saving..." : "Save changes"}
+                </Button>
+              </div>
+            </div>
           </div>
 
           <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -829,6 +950,40 @@ export function CockpitShell() {
     }
   }
 
+  async function saveQueueItem(id: string, updates: QueueItemEdit) {
+    const cleanUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([, value]) => value !== undefined)
+    ) as QueueItemEdit;
+    if (Object.keys(cleanUpdates).length === 0) return;
+
+    const previous = queue;
+    setQueue(items => items.map(item => item.id === id ? { ...item, ...cleanUpdates } : item));
+
+    if (dataMode !== "live") {
+      setSyncMessage("Demo task updated locally.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/queue", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, ...cleanUpdates }),
+      });
+      if (!res.ok) throw new Error("Task update failed");
+      const data = await res.json() as { item?: QueueItem | null };
+      const savedItem = data.item;
+      if (savedItem) {
+        setQueue(items => items.map(item => item.id === id ? savedItem : item));
+      }
+      setSyncMessage("Task updated.");
+    } catch (err) {
+      setQueue(previous);
+      setSyncMessage("Could not update the live task.");
+      throw err;
+    }
+  }
+
   function openQueueItem(item: QueueItem) {
     setSelectedQueueId(item.id);
   }
@@ -998,6 +1153,7 @@ export function CockpitShell() {
             clients={clients}
             onClose={() => setSelectedQueueId(null)}
             onMove={moveQueueItem}
+            onSave={saveQueueItem}
           />
         )}
       </TooltipProvider>
@@ -1359,6 +1515,7 @@ export function CockpitShell() {
             clients={clients}
             onClose={() => setSelectedQueueId(null)}
             onMove={moveQueueItem}
+            onSave={saveQueueItem}
           />
         )}
       </div>
