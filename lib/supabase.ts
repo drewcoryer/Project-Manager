@@ -57,7 +57,7 @@ export type QueueItem = {
   client_key: string | null;
   status: QueueStatus;
   priority: QueuePriority;
-  source: "manual" | "granola" | "slack" | "calendar";
+  source: "manual" | "granola" | "slack" | "calendar" | "gmail";
   link: string | null;
   due_date: string | null;
   remind_at: string | null;

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 
-// Initiates Google OAuth for connecting a calendar workspace.
+// Initiates Google OAuth for connecting a calendar or Gmail workspace.
 // Each workspace gets its own OAuth flow (separate Google accounts).
-// Usage: GET /api/auth/callback/google?action=connect&name=Astra+GTM&client_key=coderpad
+// Usage: GET /api/auth/callback/google?action=connect&type=gmail&name=GTM&client_key=coderpad
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.redirect(new URL("/sign-in", req.url));
@@ -14,15 +14,25 @@ export async function GET(req: NextRequest) {
   if (action === "connect") {
     const name = req.nextUrl.searchParams.get("name") || "Workspace";
     const clientKey = req.nextUrl.searchParams.get("client_key") || "";
+    const type = req.nextUrl.searchParams.get("type") === "gmail" ? "gmail" : "google_calendar";
+    const scopes = type === "gmail"
+      ? [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+      ]
+      : [
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+      ];
 
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID!,
       redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback/google`,
       response_type: "code",
-      scope: "https://www.googleapis.com/auth/calendar.readonly",
+      scope: scopes.join(" "),
       access_type: "offline",
       prompt: "consent", // Force consent to get refresh_token
-      state: JSON.stringify({ name, clientKey, userId }),
+      state: JSON.stringify({ name, clientKey, type, userId }),
     });
 
     return NextResponse.redirect(
@@ -40,6 +50,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const state = JSON.parse(stateRaw);
+    const workspaceType = state.type === "gmail" ? "gmail" : "google_calendar";
 
     // Exchange code for tokens
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
@@ -76,7 +87,7 @@ export async function GET(req: NextRequest) {
 
     await supabase.from("workspaces").upsert(
       {
-        type: "google_calendar",
+        type: workspaceType,
         name: state.name,
         client_key: state.clientKey || null,
         workspace_id: profile.email,
@@ -89,7 +100,7 @@ export async function GET(req: NextRequest) {
     );
 
     return NextResponse.redirect(
-      new URL(`/settings?connected=google&name=${encodeURIComponent(state.name)}`, req.url)
+      new URL(`/settings?connected=${workspaceType}&name=${encodeURIComponent(state.name)}`, req.url)
     );
   } catch (err) {
     console.error("Google OAuth callback error:", err);

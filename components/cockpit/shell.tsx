@@ -54,7 +54,7 @@ type CalendarEvent = {
 
 type QueueStatus = "ready" | "in-progress" | "blocked" | "done" | "archived" | "cancelled";
 type QueuePriority = "p0" | "p1" | "p2";
-type QueueSource = "manual" | "granola" | "slack" | "calendar";
+type QueueSource = "manual" | "granola" | "slack" | "calendar" | "gmail";
 
 type QueueItem = {
   id: string;
@@ -99,6 +99,20 @@ type SlackSummary = {
   needsReply: { text: string; channelName: string; user: string; permalink: string | null }[];
 };
 
+type TaskCandidate = {
+  id: string;
+  title: string;
+  description: string | null;
+  client_key: string | null;
+  priority: QueuePriority;
+  due_date: string | null;
+  confidence: number;
+  evidence: string | null;
+  reason: string | null;
+  source: QueueSource;
+  source_url: string | null;
+};
+
 type HealthCheck = {
   ok: boolean;
   label: string;
@@ -114,6 +128,8 @@ type IntegrationHealth = {
     queue: HealthCheck;
     clients: HealthCheck;
     granolaActions: HealthCheck;
+    rawEvents?: HealthCheck;
+    taskCandidates?: HealthCheck;
     granola: HealthCheck;
   };
 };
@@ -289,6 +305,8 @@ function healthProblem(health: IntegrationHealth | null) {
   if (failing) return `${failing.label}: ${failing.detail || "not connected"}`;
   if (!health.checks.clients.ok) return `${health.checks.clients.label}: ${health.checks.clients.detail || "not available"}`;
   if (!health.checks.granolaActions.ok) return `${health.checks.granolaActions.label}: optional migration not applied`;
+  if (health.checks.rawEvents && !health.checks.rawEvents.ok) return `${health.checks.rawEvents.label}: run supabase/005_raw_events_triage.sql`;
+  if (health.checks.taskCandidates && !health.checks.taskCandidates.ok) return `${health.checks.taskCandidates.label}: run supabase/005_raw_events_triage.sql`;
   return null;
 }
 
@@ -917,6 +935,105 @@ function BulkQueueBar({
   );
 }
 
+function TriageCandidateInbox({
+  candidates,
+  clients,
+  running,
+  busyId,
+  onRun,
+  onPromote,
+  onDismiss,
+}: {
+  candidates: TaskCandidate[];
+  clients: Record<string, ClientConfig>;
+  running: boolean;
+  busyId: string | null;
+  onRun: () => void;
+  onPromote: (id: string) => void;
+  onDismiss: (id: string) => void;
+}) {
+  const visible = candidates.slice(0, 6);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-1.5">
+            <Zap className="h-3.5 w-3.5" /> AI triage
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <Badge variant={candidates.length > 0 ? "warning" : "ghost"}>{candidates.length} pending</Badge>
+            <Button variant="outline" size="sm" onClick={onRun} disabled={running} className="gap-1">
+              <RefreshCw className={`h-3.5 w-3.5 ${running ? "animate-spin" : ""}`} />
+              Run
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {visible.length === 0 ? (
+          <div className="rounded-lg border bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
+            No pending candidates
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {visible.map(candidate => {
+              const due = formatDueDate(candidate.due_date);
+              const busy = busyId === candidate.id;
+
+              return (
+                <div key={candidate.id} className="rounded-lg border bg-background px-3 py-3">
+                  <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                    <PriorityBadge priority={candidate.priority} />
+                    <Badge variant="ghost" className="text-[10px] capitalize">{candidate.source}</Badge>
+                    <Badge variant="outline" className="text-[10px]">{Math.round(candidate.confidence * 100)}%</Badge>
+                    <ClientPill clientKey={candidate.client_key} clients={clients} />
+                    {!candidate.client_key && <Badge variant="ghost" className="text-[10px]">Internal</Badge>}
+                    {due && <Badge variant="ghost" className="text-[10px]">Due {due}</Badge>}
+                  </div>
+                  <div className="text-sm font-medium leading-snug">{candidate.title}</div>
+                  {(candidate.description || candidate.evidence || candidate.reason) && (
+                    <div className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-snug text-muted-foreground">
+                      {candidate.description || candidate.evidence || candidate.reason}
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    {candidate.source_url ? (
+                      <Button variant="ghost" size="sm" asChild className="h-7 gap-1 px-2 text-xs">
+                        <a href={candidate.source_url} target="_blank" rel="noopener">
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          Source
+                        </a>
+                      </Button>
+                    ) : (
+                      <span />
+                    )}
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={() => onDismiss(candidate.id)} disabled={busy} className="h-7 gap-1 text-xs">
+                        <X className="h-3.5 w-3.5" />
+                        Dismiss
+                      </Button>
+                      <Button size="sm" onClick={() => onPromote(candidate.id)} disabled={busy} className="h-7 gap-1 text-xs">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Approve
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {candidates.length > visible.length && (
+              <div className="px-1 text-xs text-muted-foreground">
+                {candidates.length - visible.length} more pending
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function CockpitShell() {
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [queueFilter, setQueueFilter] = useState("all");
@@ -925,6 +1042,7 @@ export function CockpitShell() {
   const [selectedQueueIds, setSelectedQueueIds] = useState<string[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [triageCandidates, setTriageCandidates] = useState<TaskCandidate[]>([]);
   const [clients, setClients] = useState<Record<string, ClientConfig>>(DEFAULT_CLIENTS);
   const [granola, setGranola] = useState<Record<string, GranolaMeeting>>(FALLBACK_GRANOLA);
   const [slack, setSlack] = useState<SlackSummary[]>([]);
@@ -938,17 +1056,20 @@ export function CockpitShell() {
   const [granolaImporting, setGranolaImporting] = useState(false);
   const [draggingQueueId, setDraggingQueueId] = useState<string | null>(null);
   const [bulkAction, setBulkAction] = useState<"idle" | "cancel" | "archive" | "delete">("idle");
+  const [triageRunning, setTriageRunning] = useState(false);
+  const [triageBusyId, setTriageBusyId] = useState<string | null>(null);
 
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setIsRefreshing(true);
 
     const today = dayKey(new Date());
-    const [calendarResult, queueResult, slackResult, clientsResult, healthResult] = await Promise.allSettled([
+    const [calendarResult, queueResult, slackResult, clientsResult, healthResult, triageResult] = await Promise.allSettled([
       fetchJson<{ events: CalendarEvent[] }>(`/api/calendar?date=${today}`),
       fetchJson<{ items: QueueItem[] }>("/api/queue?includeClosed=true"),
       fetchJson<{ summaries: SlackSummary[] }>("/api/slack"),
       fetchJson<{ clients: Omit<ClientConfig, "bg">[] }>("/api/clients"),
       fetchJson<IntegrationHealth>("/api/health"),
+      fetchJson<{ candidates: TaskCandidate[] }>("/api/triage?status=pending"),
     ]);
 
     let liveCount = 0;
@@ -958,6 +1079,7 @@ export function CockpitShell() {
     const slackSummaries = slackResult.status === "fulfilled" ? slackResult.value.summaries : null;
     const clientItems = clientsResult.status === "fulfilled" ? clientsResult.value.clients : null;
     const healthStatus = healthResult.status === "fulfilled" ? healthResult.value : null;
+    const pendingCandidates = triageResult.status === "fulfilled" ? triageResult.value.candidates : null;
 
     if (calendarEvents) {
       setEvents(calendarEvents);
@@ -976,6 +1098,11 @@ export function CockpitShell() {
 
     if (clientItems) {
       setClients(clientRecord(clientItems));
+      liveCount += 1;
+    }
+
+    if (pendingCandidates) {
+      setTriageCandidates(pendingCandidates);
       liveCount += 1;
     }
 
@@ -1244,6 +1371,85 @@ export function CockpitShell() {
     }
   }
 
+  async function runTriageNow() {
+    setTriageRunning(true);
+    setSyncMessage("Running AI triage...");
+
+    try {
+      const res = await fetch("/api/triage", { method: "POST" });
+      const data = await res.json().catch(() => ({})) as {
+        collected?: number;
+        processed?: number;
+        candidates?: number;
+        warning?: string | null;
+        error?: string;
+        migration?: string;
+      };
+      if (!res.ok) {
+        const migration = data.migration ? ` Run ${data.migration}.` : "";
+        throw new Error(`${data.error || "AI triage failed."}${migration}`);
+      }
+
+      setSyncMessage(`AI triage: ${data.collected || 0} raw, ${data.processed || 0} processed, ${data.candidates || 0} candidates.${data.warning ? ` ${data.warning}` : ""}`);
+      await loadData(true);
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : "AI triage failed.");
+    } finally {
+      setTriageRunning(false);
+    }
+  }
+
+  async function promoteTriageCandidate(id: string) {
+    setTriageBusyId(id);
+
+    try {
+      const res = await fetch("/api/triage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "promote", id }),
+      });
+      const data = await res.json().catch(() => ({})) as { item?: QueueItem; error?: string; migration?: string };
+      if (!res.ok) {
+        const migration = data.migration ? ` Run ${data.migration}.` : "";
+        throw new Error(`${data.error || "Could not approve candidate."}${migration}`);
+      }
+
+      if (data.item) {
+        setQueue(items => [data.item as QueueItem, ...items.filter(item => item.id !== data.item?.id)]);
+      }
+      setTriageCandidates(candidates => candidates.filter(candidate => candidate.id !== id));
+      setSyncMessage("Candidate approved into queue.");
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : "Could not approve candidate.");
+    } finally {
+      setTriageBusyId(null);
+    }
+  }
+
+  async function dismissTriageCandidate(id: string) {
+    setTriageBusyId(id);
+
+    try {
+      const res = await fetch("/api/triage", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dismiss", id }),
+      });
+      const data = await res.json().catch(() => ({})) as { error?: string; migration?: string };
+      if (!res.ok) {
+        const migration = data.migration ? ` Run ${data.migration}.` : "";
+        throw new Error(`${data.error || "Could not dismiss candidate."}${migration}`);
+      }
+
+      setTriageCandidates(candidates => candidates.filter(candidate => candidate.id !== id));
+      setSyncMessage("Candidate dismissed.");
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : "Could not dismiss candidate.");
+    } finally {
+      setTriageBusyId(null);
+    }
+  }
+
   const totalMRR = Object.values(clients).reduce((sum, client) => sum + client.mrr, 0);
   const totalMentions = slack.reduce((sum, ws) => sum + ws.unreadMentions, 0);
   const replyItems = slack.flatMap(summary => summary.needsReply.map(message => ({ ...message, workspace: summary.workspace })));
@@ -1414,6 +1620,7 @@ export function CockpitShell() {
             </TabsTrigger>
             <TabsTrigger value="queue" className="gap-1.5">
               <ListChecks className="h-3.5 w-3.5" /> Queue
+              {triageCandidates.length > 0 && <Badge variant="warning" className="ml-1 h-4 px-1 text-[10px]">{triageCandidates.length}</Badge>}
             </TabsTrigger>
           </TabsList>
 
@@ -1664,6 +1871,16 @@ export function CockpitShell() {
                 </Button>
               </div>
             </div>
+
+            <TriageCandidateInbox
+              candidates={triageCandidates}
+              clients={clients}
+              running={triageRunning}
+              busyId={triageBusyId}
+              onRun={() => void runTriageNow()}
+              onPromote={id => void promoteTriageCandidate(id)}
+              onDismiss={id => void dismissTriageCandidate(id)}
+            />
 
             <BulkQueueBar
               selectedCount={selectedQueueIds.length}

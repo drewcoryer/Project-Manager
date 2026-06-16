@@ -96,10 +96,12 @@ export async function GET() {
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const serverKey = serverKeyCheck();
-  const [queue, clients, granolaActions, granola] = await Promise.all([
+  const [queue, clients, granolaActions, rawEvents, taskCandidates, granola] = await Promise.all([
     tableCheck("queue_items", "Queue table"),
     tableCheck("clients", "Clients table"),
     tableCheck("granola_action_items", "Granola actions table"),
+    tableCheck("raw_events", "Raw source inbox"),
+    tableCheck("task_candidates", "AI task candidates"),
     granolaCheck(),
   ]);
   const cron = cronSecretCheck();
@@ -116,6 +118,8 @@ export async function GET() {
       queue,
       clients,
       granolaActions,
+      rawEvents,
+      taskCandidates,
       granola,
       cron,
       slackPosting,

@@ -8,7 +8,7 @@ Daily operating system for running a multi-client GTM consulting studio.
 - **Portfolio** - client health, revenue breakdown, concentration tracking
 - **Queue** - production backlog with priority/status/client filters
 - **Client deep-dive** - Granola notes, open deliverables, revenue % of book
-- **Settings** - connect/disconnect Google Calendar + Slack workspaces, setup checklist
+- **Settings** - connect/disconnect Google Calendar, Gmail, and Slack workspaces, setup checklist
 
 ## Stack
 
@@ -16,7 +16,7 @@ Daily operating system for running a multi-client GTM consulting studio.
 - Tailwind v4 + shadcn/ui + Lucide icons
 - Clerk (app auth)
 - Supabase (data layer)
-- Google Calendar API (multi-workspace via custom OAuth)
+- Google Calendar + Gmail APIs (multi-account via custom OAuth)
 - Slack API (multi-workspace via custom OAuth)
 - Granola API (meeting notes)
 
@@ -42,11 +42,12 @@ psql "$DATABASE_URL" -f supabase/001_initial.sql
 psql "$DATABASE_URL" -f supabase/002_granola_actions.sql
 psql "$DATABASE_URL" -f supabase/003_queue_terminal_statuses.sql
 psql "$DATABASE_URL" -f supabase/004_granola_realtime_slack.sql
+psql "$DATABASE_URL" -f supabase/005_raw_events_triage.sql
 # - Add Supabase keys to .env.local
 
 # 5. Set up Google OAuth
 # - Create project in Google Cloud Console
-# - Enable Calendar API
+# - Enable Calendar API and Gmail API
 # - Create OAuth 2.0 credentials (Web application)
 # - Add redirect URI: http://localhost:3000/api/auth/callback/google
 # - Add client ID + secret to .env.local
@@ -70,7 +71,7 @@ psql "$DATABASE_URL" -f supabase/004_granola_realtime_slack.sql
 
 # 7c. Optional: AI fallback for Granola extraction
 # - Add OPENAI_API_KEY to extract tasks when Granola's summary has no clear action bullets
-# - Optional: set OPENAI_MODEL
+# - Optional: set OPENAI_MODEL, TRIAGE_MIN_CONFIDENCE, and TRIAGE_BATCH_SIZE
 
 # 8. Run
 npm run dev
@@ -78,6 +79,7 @@ npm run dev
 # 9. Connect workspaces
 # - Open http://localhost:3000/settings
 # - Click Connect on each Google Calendar workspace
+# - Click Connect on each Gmail account you control
 # - Click Connect on each Slack workspace
 
 # 10. Deploy
@@ -99,9 +101,11 @@ app/
     slack/route.ts                  # Slack summaries
     slack/ping/route.ts             # Manual or cron-triggered attention digest pings
     cron/granola/route.ts           # Vercel cron-triggered Granola sync + Slack task notifications
+    cron/triage/route.ts            # Vercel cron-triggered raw source collection + AI task candidates
     granola/route.ts                # Meeting notes
     granola/list-todos/route.ts     # Protected immediate action endpoint for /list todo workflows
     queue/route.ts                  # Production queue CRUD
+    triage/route.ts                 # Manual AI triage + candidate approve/dismiss
     workspaces/route.ts             # Workspace management
 lib/
   calendar.ts     # Multi-workspace Google Calendar + token refresh
@@ -130,9 +134,11 @@ supabase/
 | Table | Purpose |
 |-------|---------|
 | clients | Client config (name, color, MRR, health) |
-| workspaces | OAuth tokens for Google Calendar + Slack connections |
+| workspaces | OAuth tokens for Google Calendar, Gmail, and Slack connections |
 | queue_items | Production backlog with priority/status/client/source/link/reminder metadata |
 | granola_action_items | Durable Granola to-do items linked into queue_items |
+| raw_events | Durable source inbox for Calendar/Gmail/Slack records before LLM triage |
+| task_candidates | LLM-created task suggestions awaiting approve/dismiss |
 | daily_priorities | Today's picked production items |
 
 ## Granola to Slack automation
@@ -142,6 +148,14 @@ supabase/
 - An immediate action can `POST /api/granola/list-todos` with `Authorization: Bearer $GRANOLA_ACTION_SECRET` to run the same sync after a call.
 - Manual Granola Sync still imports/backfills tasks, but suppresses Slack notifications to avoid old-note spam.
 - Slack failures leave queue items retryable; the next cron run will try unsent Granola notifications again.
+
+## Source inbox + AI triage
+
+- Vercel Cron calls `/api/cron/triage` every 20 minutes via `vercel.json`.
+- Connected Calendar, Gmail, and Slack workspaces write durable rows to `raw_events`.
+- OpenAI turns only concrete asks/follow-ups/blockers/deadlines into `task_candidates`.
+- Pending candidates appear in the Queue tab. Approving one creates a real `queue_items` row; dismissing one keeps it out of the cockpit.
+- Disconnected Gmail/Calendar/Slack placeholders are skipped, so accounts you do not have auth access to can remain visible but inactive.
 
 ## Clients (seeded)
 

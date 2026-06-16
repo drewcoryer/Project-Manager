@@ -141,7 +141,7 @@ export function fromGranolaActionRow(row: GranolaActionRow): GranolaActionItem {
 export function isSupabaseSchemaError(err: unknown) {
   const error = err as SupabaseLikeError;
   const text = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" ");
-  return /(PGRST204|PGRST205|42P01|42P10|42703|granola_action_items|granola_action_id|source_note_updated_at|extraction_method|extraction_warning|slack_notified_at|slack_channel_id|slack_message_ts|slack_notification_status|integration_locks|claim_integration_lock|release_integration_lock|schema cache|Could not find|no unique or exclusion constraint)/i.test(text);
+  return /(PGRST204|PGRST205|42P01|42P10|42703|granola_action_items|granola_action_id|raw_events|task_candidates|source_note_updated_at|extraction_method|extraction_warning|slack_notified_at|slack_channel_id|slack_message_ts|slack_notification_status|integration_locks|claim_integration_lock|release_integration_lock|schema cache|Could not find|no unique or exclusion constraint)/i.test(text);
 }
 
 export function publicErrorDetail(err: unknown) {

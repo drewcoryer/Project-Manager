@@ -6,14 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
-  ArrowLeft, Calendar, MessageSquare, Plus, Check,
+  ArrowLeft, Calendar, Mail, MessageSquare, Plus, Check,
   X, RefreshCw, ExternalLink, Wifi, WifiOff
 } from "lucide-react";
 import Link from "next/link";
 
 type Workspace = {
   id: string;
-  type: "google_calendar" | "slack";
+  type: "google_calendar" | "gmail" | "slack";
   name: string;
   client_key: string | null;
   workspace_id: string | null;
@@ -112,8 +112,8 @@ export default function SettingsPage() {
     loadWorkspaces();
   }
 
-  function connectGoogle(name: string, clientKey: string) {
-    window.location.href = `/api/auth/callback/google?action=connect&name=${encodeURIComponent(name)}&client_key=${clientKey}`;
+  function connectGoogle(name: string, clientKey: string, type: "google_calendar" | "gmail" = "google_calendar") {
+    window.location.href = `/api/auth/callback/google?action=connect&type=${type}&name=${encodeURIComponent(name)}&client_key=${clientKey}`;
   }
 
   function connectSlack(name: string, clientKey: string) {
@@ -175,6 +175,7 @@ export default function SettingsPage() {
   }
 
   const calendarWorkspaces = workspaces.filter(w => w.type === "google_calendar");
+  const gmailWorkspaces = workspaces.filter(w => w.type === "gmail");
   const slackWorkspaces = workspaces.filter(w => w.type === "slack");
 
   return (
@@ -283,6 +284,65 @@ export default function SettingsPage() {
           <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1"
             onClick={() => connectGoogle("New Workspace", "")}>
             <Plus className="w-3 h-3" /> Add another calendar
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Gmail Accounts */}
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="w-4 h-4" /> Gmail Accounts
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-4">
+            Connect the inboxes you control. Accounts without access can stay disconnected.
+          </p>
+          <div className="space-y-2">
+            {gmailWorkspaces.map(ws => (
+              <div key={ws.id} className="flex items-center gap-3 px-3 py-3 rounded-lg border bg-background">
+                {ws.is_connected ? (
+                  <Wifi className="w-4 h-4 text-emerald-500 shrink-0" />
+                ) : (
+                  <WifiOff className="w-4 h-4 text-zinc-300 shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{ws.name}</span>
+                    {ws.client_key && CLIENTS[ws.client_key] && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                        style={{ background: CLIENTS[ws.client_key].color + "15", color: CLIENTS[ws.client_key].color }}>
+                        {CLIENTS[ws.client_key].name}
+                      </span>
+                    )}
+                  </div>
+                  {ws.is_connected && ws.workspace_id && (
+                    <span className="text-[11px] text-muted-foreground">{ws.workspace_id}</span>
+                  )}
+                  {ws.is_connected && ws.last_synced_at && (
+                    <span className="text-[11px] text-muted-foreground ml-2">
+                      Synced {new Date(ws.last_synced_at).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+                {ws.is_connected ? (
+                  <Button variant="ghost" size="sm" onClick={() => disconnectWorkspace(ws.id)} className="text-xs text-muted-foreground">
+                    Disconnect
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={() => connectGoogle(ws.name, ws.client_key || "", "gmail")} className="text-xs gap-1">
+                    <Plus className="w-3 h-3" /> Connect
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <Separator className="my-4" />
+          <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1"
+            onClick={() => connectGoogle("New Gmail Account", "", "gmail")}>
+            <Plus className="w-3 h-3" /> Add Gmail account
           </Button>
         </CardContent>
       </Card>
@@ -431,6 +491,7 @@ export default function SettingsPage() {
             {[
               { label: "Run Supabase migration", done: workspaces.length > 0 },
               { label: "Connect at least one Google Calendar", done: calendarWorkspaces.some(w => w.is_connected) },
+              { label: "Connect at least one Gmail account", done: gmailWorkspaces.some(w => w.is_connected) },
               { label: "Connect at least one Slack workspace", done: slackWorkspaces.some(w => w.is_connected) },
               { label: "Add Granola API key to .env", done: false },
               { label: "Add queue items", done: false },

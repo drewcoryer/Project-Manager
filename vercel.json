@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/granola",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/triage",
+      "schedule": "*/20 * * * *"
     }
   ]
 }

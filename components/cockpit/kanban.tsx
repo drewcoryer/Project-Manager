@@ -16,7 +16,7 @@ export type KanbanItem = {
   clientLabel: string;
   status: "ready" | "in-progress" | "blocked" | "done";
   priority: "p0" | "p1" | "p2";
-  source: "granola" | "manual" | "slack";
+  source: "granola" | "manual" | "slack" | "calendar" | "gmail";
   dueDate: string | null;
   link: string | null;
 };
@@ -43,6 +43,8 @@ const PRIORITY_STYLES: Record<string, string> = {
 const SOURCE_ICON: Record<string, string> = {
   granola: "📝",
   slack: "💬",
+  calendar: "📅",
+  gmail: "✉️",
   manual: "✏️",
 };
 
