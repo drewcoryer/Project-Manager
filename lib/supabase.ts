@@ -195,6 +195,26 @@ export async function updateQueueItemStatus(id: string, status: QueueStatus) {
   if (error) throw error;
 }
 
+export async function updateQueueItemsStatus(ids: string[], status: QueueStatus) {
+  requireSupabaseConfig();
+  const cleanIds = Array.from(new Set(ids.map(id => id.trim()).filter(Boolean)));
+  if (cleanIds.length === 0) return 0;
+
+  if (status === "archived" || status === "cancelled") {
+    await Promise.all(cleanIds.map(id => updateQueueItemStatus(id, status)));
+    return cleanIds.length;
+  }
+
+  const completedAt = CLOSED_QUEUE_STATUSES.includes(status) ? new Date().toISOString() : null;
+  const { count, error } = await supabase
+    .from("queue_items")
+    .update({ status, completed_at: completedAt }, { count: "exact" })
+    .in("id", cleanIds);
+
+  if (error) throw error;
+  return count ?? cleanIds.length;
+}
+
 export async function updateQueueItemFields(id: string, updates: QueueItemFieldUpdates) {
   requireSupabaseConfig();
 
@@ -207,6 +227,26 @@ export async function updateQueueItemFields(id: string, updates: QueueItemFieldU
 
   if (error) throw error;
   return normalizeQueueItem(data);
+}
+
+export async function deleteQueueItems(ids: string[]) {
+  requireSupabaseConfig();
+  const cleanIds = Array.from(new Set(ids.map(id => id.trim()).filter(Boolean)));
+  if (cleanIds.length === 0) return 0;
+
+  const { error: priorityError } = await supabase
+    .from("daily_priorities")
+    .delete()
+    .in("queue_item_id", cleanIds);
+  if (priorityError) throw priorityError;
+
+  const { count, error } = await supabase
+    .from("queue_items")
+    .delete({ count: "exact" })
+    .in("id", cleanIds);
+
+  if (error) throw error;
+  return count ?? cleanIds.length;
 }
 
 export async function markQueueItemsPinged(ids: string[]) {

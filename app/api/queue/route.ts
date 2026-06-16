@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import {
+  deleteQueueItems,
   getQueueItems,
   QUEUE_PRIORITIES,
   QUEUE_STATUSES,
   upsertQueueItem,
   updateQueueItemFields,
+  updateQueueItemsStatus,
   updateQueueItemStatus,
   type QueueItemFieldUpdates,
   type QueuePriority,
   type QueueStatus,
 } from "@/lib/supabase";
+
+function parseQueueIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map(id => typeof id === "string" ? id.trim() : "").filter(Boolean)));
+}
 
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
@@ -48,9 +55,6 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const body = await req.json() as Record<string, unknown>;
-    const id = typeof body.id === "string" ? body.id.trim() : "";
-    if (!id) return NextResponse.json({ error: "Missing queue item id" }, { status: 400 });
-
     let status: QueueStatus | undefined;
     if ("status" in body) {
       if (!QUEUE_STATUSES.includes(body.status as QueueStatus)) {
@@ -58,6 +62,21 @@ export async function PATCH(req: NextRequest) {
       }
       status = body.status as QueueStatus;
     }
+
+    const ids = parseQueueIds(body.ids);
+    if ("ids" in body) {
+      if (ids.length === 0) return NextResponse.json({ error: "No queue item ids provided" }, { status: 400 });
+      if (body.action === "delete") {
+        const deleted = await deleteQueueItems(ids);
+        return NextResponse.json({ ok: true, deleted });
+      }
+      if (!status) return NextResponse.json({ error: "Bulk queue updates require a status" }, { status: 400 });
+      const updated = await updateQueueItemsStatus(ids, status);
+      return NextResponse.json({ ok: true, updated });
+    }
+
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    if (!id) return NextResponse.json({ error: "Missing queue item id" }, { status: 400 });
 
     const updates: QueueItemFieldUpdates = {};
     if ("title" in body) {
@@ -105,5 +124,22 @@ export async function PATCH(req: NextRequest) {
   } catch (err) {
     console.error("Queue update error:", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to update item" }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  try {
+    const body = await req.json() as Record<string, unknown>;
+    const ids = parseQueueIds(body.ids);
+    if (ids.length === 0) return NextResponse.json({ error: "No queue item ids provided" }, { status: 400 });
+
+    const deleted = await deleteQueueItems(ids);
+    return NextResponse.json({ ok: true, deleted });
+  } catch (err) {
+    console.error("Queue delete error:", err);
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to delete items" }, { status: 500 });
   }
 }

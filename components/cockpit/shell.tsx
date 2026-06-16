@@ -15,6 +15,7 @@ import {
   BellRing,
   CalendarDays,
   CheckCircle2,
+  CheckSquare2,
   ChevronLeft,
   ChevronRight,
   Circle,
@@ -30,8 +31,10 @@ import {
   RefreshCw,
   Send,
   Settings,
+  Square,
   Table2,
   TrendingUp,
+  Trash2,
   Users,
   X,
   Zap,
@@ -441,6 +444,9 @@ function QueueCard({
   item,
   clients,
   onMove,
+  selected = false,
+  selectable = false,
+  onSelect,
   draggable = false,
   onDragStart,
   onDragEnd,
@@ -449,6 +455,9 @@ function QueueCard({
   item: QueueItem;
   clients: Record<string, ClientConfig>;
   onMove: (id: string, status: QueueStatus) => void;
+  selected?: boolean;
+  selectable?: boolean;
+  onSelect?: (id: string) => void;
   draggable?: boolean;
   onDragStart?: (item: QueueItem, event: DragEvent<HTMLDivElement>) => void;
   onDragEnd?: () => void;
@@ -468,10 +477,23 @@ function QueueCard({
       onClick={() => onOpen?.(item)}
       role={onOpen ? "button" : undefined}
       tabIndex={onOpen ? 0 : undefined}
-      className={`rounded-lg border bg-card p-3 shadow-sm transition-colors hover:border-foreground/20 ${draggable ? "cursor-grab active:cursor-grabbing" : onOpen ? "cursor-pointer" : ""}`}
+      className={`rounded-lg border bg-card p-3 shadow-sm transition-colors hover:border-foreground/20 ${selected ? "border-primary/50 ring-2 ring-primary/10" : ""} ${draggable ? "cursor-grab active:cursor-grabbing" : onOpen ? "cursor-pointer" : ""}`}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
+          {selectable && (
+            <button
+              type="button"
+              aria-label={selected ? "Unselect task" : "Select task"}
+              onClick={event => {
+                event.stopPropagation();
+                onSelect?.(item.id);
+              }}
+              className="rounded p-0.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            >
+              {selected ? <CheckSquare2 className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+            </button>
+          )}
           {draggable && <GripVertical className="h-3.5 w-3.5 text-muted-foreground/50" />}
           <PriorityBadge priority={item.priority} />
         </div>
@@ -740,23 +762,44 @@ function QueueSheetView({
   clients,
   onMove,
   onOpen,
+  selectedIds,
+  onToggleSelection,
+  onSetSelection,
 }: {
   items: QueueItem[];
   clients: Record<string, ClientConfig>;
   onMove: (id: string, status: QueueStatus) => void;
   onOpen: (item: QueueItem) => void;
+  selectedIds: string[];
+  onToggleSelection: (id: string) => void;
+  onSetSelection: (ids: string[], selected: boolean) => void;
 }) {
   const sorted = [...items].sort((a, b) => {
     const priority = { p0: 0, p1: 1, p2: 2 }[a.priority] - { p0: 0, p1: 1, p2: 2 }[b.priority];
     if (priority !== 0) return priority;
     return (dueDayKey(a.due_date) || "9999-12-31").localeCompare(dueDayKey(b.due_date) || "9999-12-31");
   });
+  const selectedIdSet = new Set(selectedIds);
+  const sortedIds = sorted.map(item => item.id);
+  const selectedVisibleCount = sortedIds.filter(id => selectedIdSet.has(id)).length;
+  const allVisibleSelected = sortedIds.length > 0 && selectedVisibleCount === sortedIds.length;
 
   return (
     <div className="overflow-x-auto rounded-lg border">
       <table className="min-w-[1180px] w-full border-collapse text-left text-sm">
         <thead className="bg-muted/50 text-[10px] uppercase tracking-wide text-muted-foreground">
           <tr>
+            <th className="w-10 border-b px-3 py-2 font-semibold">
+              <button
+                type="button"
+                aria-label={allVisibleSelected ? "Unselect visible tasks" : "Select visible tasks"}
+                onClick={() => onSetSelection(sortedIds, !allVisibleSelected)}
+                className="rounded p-0.5 transition hover:bg-muted"
+                disabled={sortedIds.length === 0}
+              >
+                {allVisibleSelected ? <CheckSquare2 className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+              </button>
+            </th>
             <th className="border-b px-3 py-2 font-semibold">Task</th>
             <th className="border-b px-3 py-2 font-semibold">Client</th>
             <th className="border-b px-3 py-2 font-semibold">Priority</th>
@@ -770,12 +813,23 @@ function QueueSheetView({
         <tbody>
           {sorted.map(item => {
             const context = taskContext(item);
+            const selected = selectedIdSet.has(item.id);
             return (
               <tr
                 key={item.id}
                 onClick={() => onOpen(item)}
-                className="cursor-pointer border-b transition-colors hover:bg-muted/40"
+                className={`cursor-pointer border-b transition-colors hover:bg-muted/40 ${selected ? "bg-primary/[0.03]" : ""}`}
               >
+                <td className="px-3 py-2 align-top" onClick={event => event.stopPropagation()}>
+                  <button
+                    type="button"
+                    aria-label={selected ? "Unselect task" : "Select task"}
+                    onClick={() => onToggleSelection(item.id)}
+                    className="rounded p-0.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  >
+                    {selected ? <CheckSquare2 className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                  </button>
+                </td>
                 <td className="max-w-[260px] px-3 py-2 align-top">
                   <div className="font-medium leading-snug">{item.title}</div>
                   <div className="mt-1 text-[11px] text-muted-foreground capitalize">{getQueueSource(item)}</div>
@@ -799,11 +853,66 @@ function QueueSheetView({
           })}
           {sorted.length === 0 && (
             <tr>
-              <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">No queue items in this view</td>
+              <td colSpan={9} className="px-3 py-8 text-center text-sm text-muted-foreground">No queue items in this view</td>
             </tr>
           )}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function BulkQueueBar({
+  selectedCount,
+  visibleCount,
+  busyAction,
+  onSelectVisible,
+  onClear,
+  onCancel,
+  onArchive,
+  onDelete,
+}: {
+  selectedCount: number;
+  visibleCount: number;
+  busyAction: "idle" | "cancel" | "archive" | "delete";
+  onSelectVisible: () => void;
+  onClear: () => void;
+  onCancel: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
+}) {
+  const isBusy = busyAction !== "idle";
+
+  return (
+    <div className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${selectedCount > 0 ? "border-primary/30 bg-primary/[0.03]" : "bg-muted/20"}`}>
+      <div className="text-sm font-medium">
+        {selectedCount > 0 ? `${selectedCount} selected` : `${visibleCount} visible`}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" onClick={onSelectVisible} disabled={visibleCount === 0 || isBusy} className="gap-1">
+          <CheckSquare2 className="h-3.5 w-3.5" />
+          Select visible
+        </Button>
+        {selectedCount > 0 && (
+          <>
+            <Button variant="outline" size="sm" onClick={onCancel} disabled={isBusy} className="gap-1 text-orange-700">
+              <Ban className="h-3.5 w-3.5" />
+              {busyAction === "cancel" ? "Cancelling..." : "Cancel"}
+            </Button>
+            <Button variant="outline" size="sm" onClick={onArchive} disabled={isBusy} className="gap-1">
+              <Archive className="h-3.5 w-3.5" />
+              {busyAction === "archive" ? "Archiving..." : "Archive"}
+            </Button>
+            <Button variant="outline" size="sm" onClick={onDelete} disabled={isBusy} className="gap-1 text-destructive">
+              <Trash2 className="h-3.5 w-3.5" />
+              {busyAction === "delete" ? "Deleting..." : "Delete"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onClear} disabled={isBusy}>
+              Clear
+            </Button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -813,6 +922,7 @@ export function CockpitShell() {
   const [queueFilter, setQueueFilter] = useState("all");
   const [queueView, setQueueView] = useState<QueueView>("board");
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
+  const [selectedQueueIds, setSelectedQueueIds] = useState<string[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [clients, setClients] = useState<Record<string, ClientConfig>>(DEFAULT_CLIENTS);
@@ -827,6 +937,7 @@ export function CockpitShell() {
   const [pingState, setPingState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [granolaImporting, setGranolaImporting] = useState(false);
   const [draggingQueueId, setDraggingQueueId] = useState<string | null>(null);
+  const [bulkAction, setBulkAction] = useState<"idle" | "cancel" | "archive" | "delete">("idle");
 
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setIsRefreshing(true);
@@ -927,6 +1038,14 @@ export function CockpitShell() {
     };
   }, [selectedClient, dataMode]);
 
+  useEffect(() => {
+    const liveIds = new Set(queue.map(item => item.id));
+    setSelectedQueueIds(ids => {
+      const next = ids.filter(id => liveIds.has(id));
+      return next.length === ids.length ? ids : next;
+    });
+  }, [queue]);
+
   async function moveQueueItem(id: string, status: QueueStatus) {
     const previous = queue;
     setQueue(items => items.map(item => item.id === id ? { ...item, status } : item));
@@ -981,6 +1100,98 @@ export function CockpitShell() {
       setQueue(previous);
       setSyncMessage("Could not update the live task.");
       throw err;
+    }
+  }
+
+  function toggleQueueSelection(id: string) {
+    setSelectedQueueIds(ids => ids.includes(id) ? ids.filter(selectedId => selectedId !== id) : [...ids, id]);
+  }
+
+  function setQueueSelection(ids: string[], selected: boolean) {
+    const cleanIds = Array.from(new Set(ids.filter(Boolean)));
+    setSelectedQueueIds(current => {
+      if (selected) return Array.from(new Set([...current, ...cleanIds]));
+      return current.filter(id => !cleanIds.includes(id));
+    });
+  }
+
+  function clearQueueSelection() {
+    setSelectedQueueIds([]);
+  }
+
+  async function bulkMoveQueueItems(status: Extract<QueueStatus, "archived" | "cancelled">) {
+    const ids = selectedQueueIds.filter(id => queue.some(item => item.id === id));
+    if (ids.length === 0) return;
+
+    const action = status === "cancelled" ? "cancel" : "archive";
+    const previous = queue;
+    const previousSelection = selectedQueueIds;
+    const idSet = new Set(ids);
+
+    setBulkAction(action);
+    setQueue(items => items.map(item => idSet.has(item.id) ? { ...item, status } : item));
+    setSelectedQueueIds([]);
+
+    if (dataMode !== "live") {
+      setSyncMessage(`Demo: ${ids.length} tasks moved to ${status}.`);
+      setBulkAction("idle");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/queue", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, status }),
+      });
+      if (!res.ok) throw new Error("Bulk queue update failed");
+      setSyncMessage(`${ids.length} tasks moved to ${status}.`);
+    } catch {
+      setQueue(previous);
+      setSelectedQueueIds(previousSelection);
+      setSyncMessage("Could not update selected tasks.");
+    } finally {
+      setBulkAction("idle");
+    }
+  }
+
+  async function bulkDeleteQueueItems() {
+    const ids = selectedQueueIds.filter(id => queue.some(item => item.id === id));
+    if (ids.length === 0) return;
+    const confirmed = window.confirm(`Delete ${ids.length} selected task${ids.length === 1 ? "" : "s"} from the cockpit?`);
+    if (!confirmed) return;
+
+    const previous = queue;
+    const previousSelection = selectedQueueIds;
+    const previousSelectedQueueId = selectedQueueId;
+    const idSet = new Set(ids);
+
+    setBulkAction("delete");
+    setQueue(items => items.filter(item => !idSet.has(item.id)));
+    setSelectedQueueIds([]);
+    if (selectedQueueId && idSet.has(selectedQueueId)) setSelectedQueueId(null);
+
+    if (dataMode !== "live") {
+      setSyncMessage(`Demo: deleted ${ids.length} tasks.`);
+      setBulkAction("idle");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/queue", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) throw new Error("Bulk queue delete failed");
+      setSyncMessage(`Deleted ${ids.length} tasks.`);
+    } catch {
+      setQueue(previous);
+      setSelectedQueueIds(previousSelection);
+      setSelectedQueueId(previousSelectedQueueId);
+      setSyncMessage("Could not delete selected tasks.");
+    } finally {
+      setBulkAction("idle");
     }
   }
 
@@ -1039,6 +1250,8 @@ export function CockpitShell() {
   const filteredQueue = queueFilter === "all"
     ? queue
     : queue.filter(item => item.client_key === queueFilter || (queueFilter === "internal" && !item.client_key));
+  const filteredQueueIds = filteredQueue.map(item => item.id);
+  const selectedQueueIdSet = new Set(selectedQueueIds);
   const openQueue = queue.filter(item => !CLOSED_QUEUE_STATUSES.includes(item.status));
   const attentionQueue = queue.filter(item => !CLOSED_QUEUE_STATUSES.includes(item.status) && needsAttention(item)).slice(0, 5);
   const inboxQueue = openQueue
@@ -1452,8 +1665,27 @@ export function CockpitShell() {
               </div>
             </div>
 
+            <BulkQueueBar
+              selectedCount={selectedQueueIds.length}
+              visibleCount={filteredQueue.length}
+              busyAction={bulkAction}
+              onSelectVisible={() => setQueueSelection(filteredQueueIds, true)}
+              onClear={clearQueueSelection}
+              onCancel={() => void bulkMoveQueueItems("cancelled")}
+              onArchive={() => void bulkMoveQueueItems("archived")}
+              onDelete={() => void bulkDeleteQueueItems()}
+            />
+
             {queueView === "sheet" ? (
-              <QueueSheetView items={filteredQueue} clients={clients} onMove={moveQueueItem} onOpen={openQueueItem} />
+              <QueueSheetView
+                items={filteredQueue}
+                clients={clients}
+                onMove={moveQueueItem}
+                onOpen={openQueueItem}
+                selectedIds={selectedQueueIds}
+                onToggleSelection={toggleQueueSelection}
+                onSetSelection={setQueueSelection}
+              />
             ) : (
               <div className="overflow-x-auto pb-2">
                 <div className="grid min-w-[1180px] grid-cols-6 gap-3">
@@ -1487,6 +1719,9 @@ export function CockpitShell() {
                               item={item}
                               clients={clients}
                               onMove={moveQueueItem}
+                              selected={selectedQueueIdSet.has(item.id)}
+                              selectable
+                              onSelect={toggleQueueSelection}
                               onOpen={openQueueItem}
                               draggable
                               onDragStart={handleQueueDragStart}
