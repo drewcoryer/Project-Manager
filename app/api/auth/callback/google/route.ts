@@ -1,5 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { publicErrorDetail } from "@/lib/granola-db";
+
+function callbackUrl(req: NextRequest) {
+  const proto = req.headers.get("x-forwarded-proto") || req.nextUrl.protocol.replace(":", "") || "https";
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || req.nextUrl.host;
+  return `${proto}://${host}/api/auth/callback/google`;
+}
+
+function settingsError(req: NextRequest, error: string, detail?: unknown) {
+  const url = new URL("/settings", req.url);
+  url.searchParams.set("error", error);
+  if (detail) url.searchParams.set("detail", publicErrorDetail(detail).slice(0, 220));
+  return NextResponse.redirect(url);
+}
 
 // Initiates Google OAuth for connecting a calendar or Gmail workspace.
 // Each workspace gets its own OAuth flow (separate Google accounts).
@@ -12,9 +26,14 @@ export async function GET(req: NextRequest) {
 
   // Step 1: Initiate OAuth
   if (action === "connect") {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return settingsError(req, "google_env_missing");
+    }
+
     const name = req.nextUrl.searchParams.get("name") || "Workspace";
     const clientKey = req.nextUrl.searchParams.get("client_key") || "";
     const type = req.nextUrl.searchParams.get("type") === "gmail" ? "gmail" : "google_calendar";
+    const redirectUri = callbackUrl(req);
     const scopes = type === "gmail"
       ? [
         "https://www.googleapis.com/auth/gmail.readonly",
@@ -26,13 +45,13 @@ export async function GET(req: NextRequest) {
       ];
 
     const params = new URLSearchParams({
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback/google`,
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      redirect_uri: redirectUri,
       response_type: "code",
       scope: scopes.join(" "),
       access_type: "offline",
       prompt: "consent", // Force consent to get refresh_token
-      state: JSON.stringify({ name, clientKey, type, userId }),
+      state: JSON.stringify({ name, clientKey, type, userId, redirectUri }),
     });
 
     return NextResponse.redirect(
@@ -45,12 +64,17 @@ export async function GET(req: NextRequest) {
   const stateRaw = req.nextUrl.searchParams.get("state");
 
   if (!code || !stateRaw) {
-    return NextResponse.redirect(new URL("/settings?error=missing_code", req.url));
+    return settingsError(req, "missing_code");
   }
 
   try {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return settingsError(req, "google_env_missing");
+    }
+
     const state = JSON.parse(stateRaw);
     const workspaceType = state.type === "gmail" ? "gmail" : "google_calendar";
+    const redirectUri = typeof state.redirectUri === "string" ? state.redirectUri : callbackUrl(req);
 
     // Exchange code for tokens
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
@@ -58,9 +82,9 @@ export async function GET(req: NextRequest) {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         code,
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-        redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback/google`,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: redirectUri,
         grant_type: "authorization_code",
       }),
     });
@@ -69,7 +93,7 @@ export async function GET(req: NextRequest) {
 
     if (!tokens.access_token) {
       console.error("Google token exchange failed:", tokens);
-      return NextResponse.redirect(new URL("/settings?error=token_failed", req.url));
+      return settingsError(req, "google_token_failed", tokens);
     }
 
     // Get the email of the connected account for identification
@@ -85,7 +109,7 @@ export async function GET(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    await supabase.from("workspaces").upsert(
+    const { error: workspaceError } = await supabase.from("workspaces").upsert(
       {
         type: workspaceType,
         name: state.name,
@@ -99,11 +123,16 @@ export async function GET(req: NextRequest) {
       { onConflict: "type,workspace_id" }
     );
 
+    if (workspaceError) {
+      console.error("Google workspace save failed:", workspaceError);
+      return settingsError(req, "workspace_save_failed", workspaceError);
+    }
+
     return NextResponse.redirect(
       new URL(`/settings?connected=${workspaceType}&name=${encodeURIComponent(state.name)}`, req.url)
     );
   } catch (err) {
     console.error("Google OAuth callback error:", err);
-    return NextResponse.redirect(new URL("/settings?error=callback_failed", req.url));
+    return settingsError(req, "google_callback_failed", err);
   }
 }

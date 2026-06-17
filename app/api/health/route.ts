@@ -85,10 +85,32 @@ function slackPostingCheck(): HealthCheck {
   return { ok: true, label: "Slack posting", detail: "configured" };
 }
 
+function googleOAuthCheck(): HealthCheck {
+  const missing = [
+    !process.env.GOOGLE_CLIENT_ID ? "GOOGLE_CLIENT_ID" : null,
+    !process.env.GOOGLE_CLIENT_SECRET ? "GOOGLE_CLIENT_SECRET" : null,
+  ].filter(Boolean);
+
+  return missing.length === 0
+    ? { ok: true, label: "Google OAuth", detail: "configured" }
+    : { ok: false, label: "Google OAuth", detail: `${missing.join(", ")} missing` };
+}
+
+function slackOAuthCheck(): HealthCheck {
+  const missing = [
+    !process.env.SLACK_CLIENT_ID ? "SLACK_CLIENT_ID" : null,
+    !process.env.SLACK_CLIENT_SECRET ? "SLACK_CLIENT_SECRET" : null,
+  ].filter(Boolean);
+
+  return missing.length === 0
+    ? { ok: true, label: "Slack OAuth", detail: "configured" }
+    : { ok: false, label: "Slack OAuth", detail: `${missing.join(", ")} missing` };
+}
+
 function openAiCheck(): HealthCheck {
   return process.env.OPENAI_API_KEY
-    ? { ok: true, label: "OpenAI fallback", detail: process.env.OPENAI_MODEL || "default model" }
-    : { ok: true, label: "OpenAI fallback", detail: "optional; rules-only until OPENAI_API_KEY is set" };
+    ? { ok: true, label: "OpenAI triage", detail: process.env.OPENAI_MODEL || "default model" }
+    : { ok: false, label: "OpenAI triage", detail: "OPENAI_API_KEY missing" };
 }
 
 export async function GET() {
@@ -105,6 +127,8 @@ export async function GET() {
     granolaCheck(),
   ]);
   const cron = cronSecretCheck();
+  const googleOAuth = googleOAuthCheck();
+  const slackOAuth = slackOAuthCheck();
   const slackPosting = slackPostingCheck();
   const openAi = openAiCheck();
 
@@ -122,6 +146,8 @@ export async function GET() {
       taskCandidates,
       granola,
       cron,
+      googleOAuth,
+      slackOAuth,
       slackPosting,
       openAi,
     },

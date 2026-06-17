@@ -70,7 +70,8 @@ export default function SettingsPage() {
       setTimeout(() => setMessage(null), 4000);
     }
     if (params.get("error")) {
-      setMessage(`Connection failed: ${params.get("error")}`);
+      const detail = params.get("detail");
+      setMessage(`Connection failed: ${params.get("error")}${detail ? ` - ${detail}` : ""}`);
     }
   }, []);
 
@@ -113,11 +114,13 @@ export default function SettingsPage() {
   }
 
   function connectGoogle(name: string, clientKey: string, type: "google_calendar" | "gmail" = "google_calendar") {
-    window.location.href = `/api/auth/callback/google?action=connect&type=${type}&name=${encodeURIComponent(name)}&client_key=${clientKey}`;
+    const params = new URLSearchParams({ action: "connect", type, name, client_key: clientKey });
+    window.location.href = `/api/auth/callback/google?${params.toString()}`;
   }
 
   function connectSlack(name: string, clientKey: string) {
-    window.location.href = `/api/auth/callback/slack?action=connect&name=${encodeURIComponent(name)}&client_key=${clientKey}`;
+    const params = new URLSearchParams({ action: "connect", name, client_key: clientKey });
+    window.location.href = `/api/auth/callback/slack?${params.toString()}`;
   }
 
   async function importGranolaActions() {
@@ -457,7 +460,7 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between py-2">
               <div>
                 <div className="text-sm font-medium">Granola</div>
-                <div className="text-[11px] text-muted-foreground">Meeting notes</div>
+                <div className="text-[11px] text-muted-foreground">Env: GRANOLA_API_KEY</div>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant={process.env.NEXT_PUBLIC_GRANOLA_CONNECTED === "true" ? "success" : "ghost"}>
@@ -472,10 +475,32 @@ export default function SettingsPage() {
             <Separator />
             <div className="flex items-center justify-between py-2">
               <div>
-                <div className="text-sm font-medium">Attio</div>
-                <div className="text-[11px] text-muted-foreground">CRM pipeline (future)</div>
+                <div className="text-sm font-medium">OpenAI</div>
+                <div className="text-[11px] text-muted-foreground">Env: OPENAI_API_KEY</div>
               </div>
-              <Badge variant="ghost">Set in .env</Badge>
+              <Badge variant={health?.checks.openAi?.ok ? "success" : "warning"}>
+                {health?.checks.openAi?.ok ? "Connected" : "Set in env"}
+              </Badge>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between py-2">
+              <div>
+                <div className="text-sm font-medium">Google OAuth</div>
+                <div className="text-[11px] text-muted-foreground">Env: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET</div>
+              </div>
+              <Badge variant={health?.checks.googleOAuth?.ok ? "success" : "warning"}>
+                {health?.checks.googleOAuth?.ok ? "Ready" : "Env missing"}
+              </Badge>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between py-2">
+              <div>
+                <div className="text-sm font-medium">Slack OAuth</div>
+                <div className="text-[11px] text-muted-foreground">Env: SLACK_CLIENT_ID / SLACK_CLIENT_SECRET</div>
+              </div>
+              <Badge variant={health?.checks.slackOAuth?.ok ? "success" : "warning"}>
+                {health?.checks.slackOAuth?.ok ? "Ready" : "Env missing"}
+              </Badge>
             </div>
           </div>
         </CardContent>
@@ -493,7 +518,8 @@ export default function SettingsPage() {
               { label: "Connect at least one Google Calendar", done: calendarWorkspaces.some(w => w.is_connected) },
               { label: "Connect at least one Gmail account", done: gmailWorkspaces.some(w => w.is_connected) },
               { label: "Connect at least one Slack workspace", done: slackWorkspaces.some(w => w.is_connected) },
-              { label: "Add Granola API key to .env", done: false },
+              { label: "Add Granola API key to env", done: Boolean(health?.checks.granola?.ok) },
+              { label: "Add OpenAI API key to env", done: Boolean(health?.checks.openAi?.ok) },
               { label: "Add queue items", done: false },
             ].map((item, i) => (
               <div key={i} className="flex items-center gap-2">

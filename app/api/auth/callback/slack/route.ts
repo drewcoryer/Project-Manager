@@ -1,5 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { publicErrorDetail } from "@/lib/granola-db";
+
+function callbackUrl(req: NextRequest) {
+  const proto = req.headers.get("x-forwarded-proto") || req.nextUrl.protocol.replace(":", "") || "https";
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || req.nextUrl.host;
+  return `${proto}://${host}/api/auth/callback/slack`;
+}
+
+function settingsError(req: NextRequest, error: string, detail?: unknown) {
+  const url = new URL("/settings", req.url);
+  url.searchParams.set("error", error);
+  if (detail) url.searchParams.set("detail", publicErrorDetail(detail).slice(0, 220));
+  return NextResponse.redirect(url);
+}
 
 // Slack OAuth v2 flow for connecting workspaces.
 // Supports both owned (GTM Garden, GTM Consulting) and client workspaces
@@ -14,8 +28,13 @@ export async function GET(req: NextRequest) {
 
   // Step 1: Initiate OAuth
   if (action === "connect") {
+    if (!process.env.SLACK_CLIENT_ID || !process.env.SLACK_CLIENT_SECRET) {
+      return settingsError(req, "slack_env_missing");
+    }
+
     const name = req.nextUrl.searchParams.get("name") || "Workspace";
     const clientKey = req.nextUrl.searchParams.get("client_key") || "";
+    const redirectUri = callbackUrl(req);
 
     // User token scopes - read-only access to channels, messages, search
     const scopes = [
@@ -33,10 +52,10 @@ export async function GET(req: NextRequest) {
     ].join(",");
 
     const params = new URLSearchParams({
-      client_id: process.env.SLACK_CLIENT_ID!,
+      client_id: process.env.SLACK_CLIENT_ID,
       user_scope: scopes, // user_scope for user tokens (not scope for bot tokens)
-      redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback/slack`,
-      state: JSON.stringify({ name, clientKey, userId }),
+      redirect_uri: redirectUri,
+      state: JSON.stringify({ name, clientKey, userId, redirectUri }),
     });
 
     return NextResponse.redirect(
@@ -49,11 +68,16 @@ export async function GET(req: NextRequest) {
   const stateRaw = req.nextUrl.searchParams.get("state");
 
   if (!code || !stateRaw) {
-    return NextResponse.redirect(new URL("/settings?error=missing_code", req.url));
+    return settingsError(req, "missing_code");
   }
 
   try {
+    if (!process.env.SLACK_CLIENT_ID || !process.env.SLACK_CLIENT_SECRET) {
+      return settingsError(req, "slack_env_missing");
+    }
+
     const state = JSON.parse(stateRaw);
+    const redirectUri = typeof state.redirectUri === "string" ? state.redirectUri : callbackUrl(req);
 
     // Exchange code for user token
     const tokenRes = await fetch("https://slack.com/api/oauth.v2.access", {
@@ -61,9 +85,9 @@ export async function GET(req: NextRequest) {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         code,
-        client_id: process.env.SLACK_CLIENT_ID!,
-        client_secret: process.env.SLACK_CLIENT_SECRET!,
-        redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback/slack`,
+        client_id: process.env.SLACK_CLIENT_ID,
+        client_secret: process.env.SLACK_CLIENT_SECRET,
+        redirect_uri: redirectUri,
       }),
     });
 
@@ -71,7 +95,7 @@ export async function GET(req: NextRequest) {
 
     if (!data.ok || !data.authed_user?.access_token) {
       console.error("Slack token exchange failed:", data);
-      return NextResponse.redirect(new URL("/settings?error=slack_token_failed", req.url));
+      return settingsError(req, "slack_token_failed", data);
     }
 
     const teamId = data.team?.id;
@@ -85,7 +109,7 @@ export async function GET(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    await supabase.from("workspaces").upsert(
+    const { error: workspaceError } = await supabase.from("workspaces").upsert(
       {
         type: "slack",
         name: teamName,
@@ -98,11 +122,16 @@ export async function GET(req: NextRequest) {
       { onConflict: "type,workspace_id" }
     );
 
+    if (workspaceError) {
+      console.error("Slack workspace save failed:", workspaceError);
+      return settingsError(req, "workspace_save_failed", workspaceError);
+    }
+
     return NextResponse.redirect(
       new URL(`/settings?connected=slack&name=${encodeURIComponent(teamName)}`, req.url)
     );
   } catch (err) {
     console.error("Slack OAuth callback error:", err);
-    return NextResponse.redirect(new URL("/settings?error=callback_failed", req.url));
+    return settingsError(req, "slack_callback_failed", err);
   }
 }
